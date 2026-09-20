@@ -17,4 +17,7 @@ export interface Decision {
   sandbox?: string;
   spawnAgent?: string;
   repoName?: string;
+  /** Set only when the decision came from routing/jev-model.ts instead of a config rule. */
+  confidence?: number;
+  reasoning?: string;
 }

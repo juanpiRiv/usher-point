@@ -10,17 +10,21 @@ any flags) into a `TaskShape`, walks the rules in `usher-point.config.json` in o
 (first match wins), and either prints the decision (`usher-point route`) or actually
 launches the resolved command (`usher-point run`).
 
-> This project was previously named `jev`. The binary, package name, and
-> config filename are now all `usher-point`; a leftover `jev.config.json`
-> is still picked up as a fallback for one release if `usher-point.config.json`
-> isn't found (see `src/config/load.ts`).
+> This project was previously named `jev` during scaffolding. The binary,
+> package name, and config filename are now all `usher-point`; a leftover
+> `jev.config.json` is still picked up as a fallback for one release if
+> `usher-point.config.json` isn't found (see `src/config/load.ts`). To avoid
+> confusion: **`usher-point` is this CLI**; **`Jev`** (below) is an unrelated,
+> real, third-party AI model this CLI can *optionally* call — the old
+> scaffolding name and the third-party model name are just a coincidence.
 
 ## Commands
 
-### `usher-point route "<task>" [--repo <name>] [--target <target>] [--worktree] [--verbose]`
+### `usher-point route "<task>" [--repo <name>] [--target <target>] [--worktree] [--verbose] [--engine <heuristic|jev|auto>]`
 
 Dry-run (the default way to use usher-point). Prints:
-- which rule matched (or `explicit-target-flag` / `fallback-claude-inline`)
+- which engine decided (`via:`) and, for the heuristic, which rule matched
+  (or `explicit-target-flag` / `fallback-claude-inline`)
 - the resolved target (`claude-inline`, `codex-cli`, or `orca-worktree`)
 - the exact command that would run
 - which skills (paths to `SKILL.md`, never their content) look relevant
@@ -36,12 +40,53 @@ exit code.
 ### `usher-point doctor`
 
 Checks that `claude`, `codex`, and `orca` resolve in `PATH`, does a read-only
-`orca status --json` liveness check, and refreshes the local
+`orca status --json` liveness check, refreshes the local
 `orca-cli-reference.json` cache (gitignored) by running `orca skills get
-orca-cli`. `usher-point` never hardcodes Orca's own subcommand syntax — it
-changes between Orca releases — so the real worktree-spawn command is only
-ever read from this cache. If the cache is missing or stale, run
-`usher-point doctor` again.
+orca-cli`, and reports whether the Jev routing engine is usable (see below).
+`usher-point` never hardcodes Orca's own subcommand syntax — it changes
+between Orca releases — so the real worktree-spawn command is only ever read
+from this cache. If the cache is missing or stale, run `usher-point doctor`
+again.
+
+## Optional: routing via TypeSafe AI's "Jev" model
+
+By default, `usher-point` decides where to route a task with the local,
+hand-written heuristic in `src/routing/classify.ts` + `decide.ts` — plain
+keyword/flag checks, no network calls, no ML. Optionally, it can instead ask
+**TypeSafe AI's "Jev"** model — a real third-party "System One Model"
+purpose-built for fast structured/typed decisions (routing, classification),
+not general chat — to make the call. `usher-point` reaches it only through
+**OpenRouter's** standard chat-completions API
+(`https://openrouter.ai/api/v1/chat/completions`), using your own OpenRouter
+API key. `usher-point` never talks to `docs.typesafe.ai`/`console.typesafe.ai`
+directly and never stores or prints your API key.
+
+To enable it:
+
+1. Get an OpenRouter API key (see `openrouter.ai/typesafe` for the Jev model
+   listing) and export it: `export OPENROUTER_API_KEY=sk-...` (see
+   `env.example` for the variable name — named without the usual leading dot
+   because this environment's own tool permissions hard-deny writing `.env*`
+   files). `usher-point` itself never reads a `.env` file — it only reads
+   `process.env` at call time.
+2. In `usher-point.config.json`, set `"jevModel": { "enabled": true, ... }`.
+   `model` defaults to `"typesafe/jev-1.13"` (pinned) — `"typesafe/jev-latest"`
+   is also valid. `apiKeyEnvVar` defaults to `"OPENROUTER_API_KEY"` and can be
+   changed if you keep the key under a different variable name.
+
+Behavior:
+- **`--engine auto`** (default) — try Jev first; on *any* failure (disabled,
+  no key, network error, bad HTTP status, unparseable reply) it fails closed
+  to the local heuristic, and `route`/`run` print which engine actually
+  decided (e.g. `via: heuristic-fallback (jev-model unavailable)` or
+  `via: jev-model (typesafe/jev-1.13)`).
+- **`--engine heuristic`** — always use the local rules, never call OpenRouter.
+- **`--engine jev`** — always call Jev; if it's unavailable for any reason,
+  this fails loudly with a clear error instead of silently substituting the
+  heuristic, since you explicitly asked for Jev.
+
+`usher-point` never crashes because Jev is unavailable — the local heuristic
+remains the default and the fallback path in `--engine auto`.
 
 ## Editing `usher-point.config.json`
 

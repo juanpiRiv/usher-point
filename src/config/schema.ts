@@ -11,6 +11,10 @@ export const TargetConfigSchema = z.object({
   defaultFlags: z.array(z.string()).optional(),
   defaultModel: z.string().optional(),
   defaultEffort: z.string().optional(),
+  /** One-line, human-readable meaning of this target. Reused verbatim by
+   * routing/jev-model.ts when asking the Jev model to choose a target, so it
+   * never has to duplicate these descriptions in code. */
+  description: z.string().optional(),
 });
 export type TargetConfig = z.infer<typeof TargetConfigSchema>;
 
@@ -38,6 +42,22 @@ export const KnownRepoSchema = z.object({
 });
 export type KnownRepo = z.infer<typeof KnownRepoSchema>;
 
+/**
+ * Optional TypeSafe AI "Jev" routing engine config — an alternative decision
+ * source to the hand-written heuristic in classify.ts/decide.ts. Jev is a
+ * third-party "System One Model" reached only via OpenRouter's standard
+ * chat-completions API. The API key itself is NEVER stored here — only the
+ * name of the environment variable to read it from at call time.
+ */
+export const JevModelConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    model: z.string().min(1).default("typesafe/jev-1.13"),
+    apiKeyEnvVar: z.string().min(1).default("OPENROUTER_API_KEY"),
+  })
+  .default({ enabled: false, model: "typesafe/jev-1.13", apiKeyEnvVar: "OPENROUTER_API_KEY" });
+export type JevModelConfig = z.infer<typeof JevModelConfigSchema>;
+
 export const JevConfigSchema = z.object({
   targets: z.object({
     claudeInline: TargetConfigSchema,
@@ -46,5 +66,6 @@ export const JevConfigSchema = z.object({
   }),
   rules: z.array(RuleSchema).min(1),
   knownRepos: z.record(z.string(), KnownRepoSchema),
+  jevModel: JevModelConfigSchema,
 });
 export type JevConfig = z.infer<typeof JevConfigSchema>;

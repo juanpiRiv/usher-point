@@ -23,12 +23,12 @@ command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,
 ### Multi-file task across a known repo → `orca-worktree`
 
 ```
-$ usher-point route "implement a new multi-file feature across the takenos-data-stack repo"
-task:   "implement a new multi-file feature across the takenos-data-stack repo"
+$ usher-point route "implement a new multi-file feature across the my-data-warehouse repo"
+task:   "implement a new multi-file feature across the my-data-warehouse repo"
 rule:   isolated-worktree-build
 target: orca-worktree
-repo:   takenos-data-stack
-worktree root: /Users/juanpablorivero/orca/workspaces/takenos-data-stack
+repo:   my-data-warehouse
+worktree root: /Users/juanpablorivero/orca/workspaces/my-data-warehouse
 agent:  codex
 skills: use-railway (score 2, registry), aplos-gaia-audit (score 1, registry), bigquery-observability (score 1, registry), data-clawlers (score 1, registry), gh-fix-ci (score 1, registry)
 command: <unavailable> — usher-point: no Orca CLI reference cache found at /Users/juanpablorivero/dev/usher-point/orca-cli-reference.json. Run `usher-point doctor` first.
@@ -49,6 +49,62 @@ skills: (none matched)
 command: codex exec --skip-git-repo-check --sandbox read-only --config "model=\"gpt-6-astra\"" --config "model_reasoning_effort=\"high\"" -C /Users/juanpablorivero anything
 ```
 
+### Forcing the heuristic engine explicitly
+
+`--engine heuristic` skips the optional Jev model entirely, even if
+`jevModel.enabled` is `true` in config — useful for testing/debugging the
+local rules in isolation:
+
+```
+$ usher-point route "fix a typo in README" --engine heuristic
+task:   "fix a typo in README"
+rule:   quick-inline
+via:    heuristic (forced)
+target: claude-inline
+skills: gh-fix-ci (score 1, registry), judgment-day (score 1, registry), migrating-dbt-project-across-platforms (score 1, registry)
+command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
+```
+
+### Default `--engine auto` with no `OPENROUTER_API_KEY` set
+
+This is what every machine without a Jev setup sees by default — `auto`
+tries Jev first, and fails closed to the heuristic. Real output, captured on
+this machine (no API key configured):
+
+```
+$ usher-point route "fix a typo in README"
+task:   "fix a typo in README"
+rule:   quick-inline
+via:    heuristic-fallback (jev-model unavailable)
+target: claude-inline
+skills: gh-fix-ci (score 1, registry), judgment-day (score 1, registry), migrating-dbt-project-across-platforms (score 1, registry)
+command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
+```
+
+### `--engine jev` (illustrative / untested — no OpenRouter key on this machine)
+
+**This example was not run against the real Jev model** — there is no
+OpenRouter API key configured on this machine, so this output is illustrative
+of the intended shape only, not a captured run:
+
+```
+$ export OPENROUTER_API_KEY=sk-...             # real key, not shown here
+$ usher-point route "fix a typo in README" --engine jev
+task:   "fix a typo in README"
+via:    jev-model (typesafe/jev-1.13)
+target: claude-inline
+skills: gh-fix-ci (score 1, registry), judgment-day (score 1, registry), migrating-dbt-project-across-platforms (score 1, registry)
+command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
+```
+
+What *was* verified for real on this machine, with `--engine jev` forced and
+no API key present, is the fail-closed error path (not a silent fallback):
+
+```
+$ usher-point route "anything" --engine jev
+usher-point: --engine jev was forced but the Jev model is unavailable (jevModel.enabled is false in usher-point.config.json). Refusing to silently fall back to the heuristic — retry with --engine auto or --engine heuristic.
+```
+
 ## `usher-point run`
 
 Identical output to `route`, followed by actually launching the resolved
@@ -60,9 +116,11 @@ agentic work during verification).
 ## `usher-point doctor`
 
 Safe and read-only by design: checks `claude`/`codex`/`orca` resolve in
-`PATH`, does a read-only `orca status --json` liveness check, and refreshes
-`orca-cli-reference.json` by running `orca skills get orca-cli`. It never
-spawns a worktree or an agent.
+`PATH`, does a read-only `orca status --json` liveness check, refreshes
+`orca-cli-reference.json` by running `orca skills get orca-cli`, and reports
+whether the configured OpenRouter API key env var is set and (only if it is)
+whether a live Jev call succeeds. It never spawns a worktree or an agent, and
+never prints the key's value.
 
 ```
 $ usher-point doctor
@@ -71,6 +129,7 @@ $ usher-point doctor
 [ok]   orca -> /usr/local/bin/orca
 [ok]   orca status --json reachable (app running: false)
 [ok]   refreshed Orca CLI reference cache at /Users/juanpablorivero/dev/usher-point/orca-cli-reference.json
+[warn] OPENROUTER_API_KEY not set — Jev routing engine unavailable; usher-point still works via the heuristic engine
 ```
 
 On this machine, `orca status --json` reached the CLI even with the Orca
@@ -79,7 +138,12 @@ desktop app not running (`app running: false`) — `doctor` reports this as
 report the app's actual state, not to require it be running. If the `orca`
 binary itself weren't on `PATH`, or `orca status --json`/`orca skills get
 orca-cli` errored outright, `doctor` reports `[fail]`/`[warn]` per line and
-exits non-zero — it does not crash.
+exits non-zero — it does not crash. The `OPENROUTER_API_KEY` line is always
+`[warn]` at worst, never `[fail]`, since Jev is optional and the heuristic
+engine remains fully functional without it. If the key *is* set, `doctor`
+also attempts one live, trivial-prompt Jev call and reports `[ok]`/`[warn]`
+for that too — this was not exercised on this machine since no key is
+configured here.
 
 ### Orca-worktree routing after `doctor`
 
@@ -88,7 +152,7 @@ reports `command: <unavailable>`, but with a different, more specific
 reason:
 
 ```
-$ usher-point route "implement a new multi-file feature across the takenos-data-stack repo"
+$ usher-point route "implement a new multi-file feature across the my-data-warehouse repo"
 ...
 command: <unavailable> — usher-point: Orca CLI reference cache at /Users/juanpablorivero/dev/usher-point/orca-cli-reference.json has no recognized worktree-spawn subcommand. Run `usher-point doctor` to refresh it, or inspect the cache file manually.
 ```

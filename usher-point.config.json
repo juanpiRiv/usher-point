@@ -1,8 +1,20 @@
 {
   "targets": {
-    "claudeInline": { "command": "claude", "defaultFlags": ["-p"] },
-    "codexCli": { "command": "codex", "defaultModel": "gpt-6-astra", "defaultEffort": "high" },
-    "orcaWorktree": { "command": "orca" }
+    "claudeInline": {
+      "command": "claude",
+      "defaultFlags": ["-p"],
+      "description": "Small, single-file task that Claude Code can do inline, in this session, with no isolation."
+    },
+    "codexCli": {
+      "command": "codex",
+      "defaultModel": "gpt-6-astra",
+      "defaultEffort": "high",
+      "description": "Autonomous multi-file task in a single known repo, run via Codex CLI with a sandbox, no worktree isolation."
+    },
+    "orcaWorktree": {
+      "command": "orca",
+      "description": "Multi-repo, risky, or explicitly isolated task that needs its own Orca worktree before an agent touches it."
+    }
   },
   "rules": [
     { "id": "quick-inline", "when": { "multiFile": false, "needsIsolation": false }, "target": "claudeInline" },
@@ -10,7 +22,12 @@
     { "id": "isolated-worktree-build", "when": { "needsIsolation": true }, "target": "orcaWorktree", "spawnAgent": "codex" }
   ],
   "knownRepos": {
-    "takenos-data-stack": { "worktreeRoot": "~/orca/workspaces/takenos-data-stack" },
-    "monodata": { "worktreeRoot": "~/orca/workspaces/monodata" }
+    "my-data-warehouse": { "worktreeRoot": "~/orca/workspaces/my-data-warehouse" },
+    "my-monorepo": { "worktreeRoot": "~/orca/workspaces/my-monorepo" }
+  },
+  "jevModel": {
+    "enabled": false,
+    "model": "typesafe/jev-1.13",
+    "apiKeyEnvVar": "OPENROUTER_API_KEY"
   }
 }

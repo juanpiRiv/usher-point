@@ -4,3 +4,4 @@ dist/
 orca-cli-reference.json
 *.log
 .DS_Store
+.env

@@ -15,10 +15,21 @@ and dispatches (or, with `route`, just prints what it would dispatch).
 
 ## End-to-end flow
 
+An explicit `--target` flag always wins outright, before either engine below
+runs. Otherwise `--engine` picks the decision source: `heuristic` always uses
+`classify.ts`/`decide.ts`; `jev` always calls the optional Jev model and
+fails loudly if it's unavailable; `auto` (default) tries Jev first and falls
+back to the heuristic on any failure.
+
 ```mermaid
 flowchart TD
-    A["user task string\n(usher-point route/run \"...\" [flags])"] --> B["classify.ts\nbuilds TaskShape\n(isMultiFile, isMultiRepo,\nneedsIsolation, explicitTarget, repoName)"]
-    B --> C["decide.ts\nwalks usher-point.config.json rules,\nfirst match wins\n(explicit --target always wins outright)"]
+    A["user task string\n(usher-point route/run \"...\" [flags, --engine])"] --> B["classify.ts\nbuilds TaskShape\n(isMultiFile, isMultiRepo,\nneedsIsolation, explicitTarget, repoName)"]
+    B --> Z{"explicitTarget set?"}
+    Z -->|yes| C
+    Z -->|no, engine=jev or auto| J["jev-model.ts\nHTTP POST to OpenRouter\n(typesafe/jev-*, via OPENROUTER_API_KEY)"]
+    Z -->|no, engine=heuristic| C
+    J -->|decision parsed OK| C
+    J -->|disabled / no key / network error /\nbad status / unparseable reply → null| C["decide.ts\nwalks usher-point.config.json rules,\nfirst match wins\n(explicit --target always wins outright)"]
     C -->|target: claude-inline| D["claude-adapter.ts"]
     C -->|target: codex-cli| E["codex-adapter.ts"]
     C -->|target: orca-worktree| F["orca-adapter.ts"]
@@ -29,6 +40,12 @@ flowchart TD
     G --> H2["codex exec --sandbox ... \"...\""]
     G --> H3["orca <resolved subcommand> ..."]
 ```
+
+Note: when Jev succeeds, its `Decision` is used directly and `decide.ts`'s
+rule-walk is skipped for that invocation (the diagram merges both paths into
+the same downstream box for space; see `src/cli.ts#resolveRoute` for the
+exact branching). `cli.ts` prints which engine actually decided as `via:` in
+`route`/`run` output either way.
 
 `skills/select.ts` runs alongside this (not shown above for clarity): it
 independently ranks candidate `SKILL.md` paths against the task text, from
