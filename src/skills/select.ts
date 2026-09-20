@@ -128,6 +128,26 @@ interface Candidate {
   source: "registry" | "fallback";
 }
 
+/**
+ * Below this many overlapping (non-stopword) tokens, a match is treated as
+ * noise, not signal, and dropped entirely — better to show no skills than a
+ * random low-confidence one. Picked empirically, not guessed: on this
+ * machine's ~43 globally-installed skills (`~/.agents/skills`, mostly
+ * unrelated dbt/data-eng skills), a raw single-token overlap (score 1) is
+ * overwhelmingly a coincidental hit on a common domain buzzword that appears
+ * in many unrelated descriptions (e.g. "dbt", "sql", "performance" each
+ * appear in 5-15 of the ~43 descriptions here) rather than a real signal —
+ * e.g. "fix a typo in README" matched `migrating-dbt-project-across-platforms`
+ * at score 1 purely because both mention "fix". Requiring at least 2
+ * overlapping tokens reliably separates real matches (e.g. "migrate our dbt
+ * project from snowflake to databricks" scores `upgrading-dbt-core` at 4 and
+ * `migrating-dbt-project-across-platforms` at 3) from single-word
+ * coincidences, at the cost of also dropping the rare case where exactly one
+ * highly distinctive word (e.g. "react") is the only overlap — an acceptable
+ * tradeoff given the goal is avoiding noise, not maximizing recall.
+ */
+const MIN_SCORE = 2;
+
 function rank(candidates: Candidate[], keywords: Set<string>): SkillMatch[] {
   return candidates
     .map((candidate) => ({
@@ -136,7 +156,7 @@ function rank(candidates: Candidate[], keywords: Set<string>): SkillMatch[] {
       source: candidate.source,
       score: overlapScore(tokenize(candidate.text), keywords),
     }))
-    .filter((match) => match.score > 0)
+    .filter((match) => match.score >= MIN_SCORE)
     .sort((a, b) => b.score - a.score);
 }
 
@@ -148,6 +168,23 @@ function overlapScore(candidateTokens: Set<string>, taskKeywords: Set<string>): 
   return score;
 }
 
+/**
+ * This is a bare keyword-overlap count with no normalization by task or
+ * description length (see `overlapScore`) — so every token that survives
+ * tokenization counts equally toward the score, whether or not it actually
+ * carries topic-specific signal. The original 15-word stopword list let
+ * through common generic verbs/prepositions ("fix", "write", "help",
+ * "across", "files", ...) that appear in nearly any task description or
+ * skill blurb, inflating scores with meaningless overlap — e.g. "fix a typo
+ * in README" only matched `migrating-dbt-project-across-platforms` because
+ * its description happens to also contain the word "fix" ("...identify and
+ * fix SQL dialect differences"). This list was expanded empirically by
+ * running `selectSkills()` against several real task strings and the actual
+ * ~43 skills installed under `~/.agents/skills` on this machine, and adding
+ * every generic filler word responsible for a spurious match (see git
+ * history/PR description for the before/after numbers) — kept as a plain
+ * word list, not a scoring model, per this project's "no ML" convention.
+ */
 const STOPWORDS = new Set([
   "the",
   "a",
@@ -161,9 +198,160 @@ const STOPWORDS = new Set([
   "on",
   "with",
   "use",
+  "used",
+  "uses",
+  "using",
+  "user",
+  "users",
   "when",
   "this",
   "that",
+  "these",
+  "those",
+  "about",
+  "across",
+  "add",
+  "added",
+  "adding",
+  "adds",
+  "all",
+  "also",
+  "any",
+  "are",
+  "as",
+  "at",
+  "be",
+  "been",
+  "being",
+  "between",
+  "by",
+  "can",
+  "cannot",
+  "check",
+  "checked",
+  "checking",
+  "checks",
+  "code",
+  "could",
+  "create",
+  "created",
+  "creates",
+  "creating",
+  "did",
+  "do",
+  "does",
+  "doing",
+  "done",
+  "down",
+  "during",
+  "each",
+  "file",
+  "files",
+  "fix",
+  "fixed",
+  "fixes",
+  "fixing",
+  "from",
+  "get",
+  "gets",
+  "getting",
+  "got",
+  "had",
+  "has",
+  "have",
+  "help",
+  "helped",
+  "helping",
+  "helps",
+  "how",
+  "i",
+  "into",
+  "is",
+  "it",
+  "its",
+  "just",
+  "like",
+  "make",
+  "made",
+  "makes",
+  "making",
+  "may",
+  "me",
+  "might",
+  "more",
+  "most",
+  "must",
+  "my",
+  "need",
+  "needed",
+  "needing",
+  "needs",
+  "new",
+  "no",
+  "nor",
+  "not",
+  "off",
+  "old",
+  "one",
+  "only",
+  "other",
+  "our",
+  "out",
+  "over",
+  "project",
+  "projects",
+  "review",
+  "reviewed",
+  "reviewing",
+  "reviews",
+  "run",
+  "running",
+  "runs",
+  "should",
+  "so",
+  "some",
+  "such",
+  "task",
+  "tasks",
+  "than",
+  "their",
+  "them",
+  "then",
+  "they",
+  "three",
+  "through",
+  "two",
+  "under",
+  "up",
+  "us",
+  "very",
+  "want",
+  "wanted",
+  "wanting",
+  "wants",
+  "was",
+  "were",
+  "what",
+  "where",
+  "which",
+  "who",
+  "whom",
+  "why",
+  "will",
+  "within",
+  "without",
+  "work",
+  "worked",
+  "working",
+  "works",
+  "would",
+  "write",
+  "writes",
+  "writing",
+  "written",
+  "you",
+  "your",
+  "yours",
 ]);
 
 function tokenize(text: string): Set<string> {
