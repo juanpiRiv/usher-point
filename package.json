@@ -1,0 +1,26 @@
+{
+  "name": "jev",
+  "version": "0.1.0",
+  "description": "Local CLI that decides where a task should run (Claude Code inline, Codex CLI, or an isolated Orca worktree) and dispatches it.",
+  "private": true,
+  "type": "commonjs",
+  "bin": {
+    "jev": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "jev.config.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/add-shebang.js",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2"
+  }
+}

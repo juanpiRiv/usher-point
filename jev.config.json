@@ -1,0 +1,16 @@
+{
+  "targets": {
+    "claudeInline": { "command": "claude", "defaultFlags": ["-p"] },
+    "codexCli": { "command": "codex", "defaultModel": "gpt-6-astra", "defaultEffort": "high" },
+    "orcaWorktree": { "command": "orca" }
+  },
+  "rules": [
+    { "id": "quick-inline", "when": { "multiFile": false, "needsIsolation": false }, "target": "claudeInline" },
+    { "id": "autonomous-single-repo", "when": { "multiFile": true, "needsIsolation": false }, "target": "codexCli", "sandbox": "workspace-write" },
+    { "id": "isolated-worktree-build", "when": { "needsIsolation": true }, "target": "orcaWorktree", "spawnAgent": "codex" }
+  ],
+  "knownRepos": {
+    "takenos-data-stack": { "worktreeRoot": "~/orca/workspaces/takenos-data-stack" },
+    "monodata": { "worktreeRoot": "~/orca/workspaces/monodata" }
+  }
+}
