@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { resolveApiKey } from "../config/api-key";
 import type { JevConfig, JevModelConfig } from "../config/schema";
 import type { Decision, RouteTarget } from "./types";
 
@@ -66,14 +67,23 @@ const JevModelResponseSchema = z.object({
 
 export type JevAvailability = { available: true } | { available: false; reason: string };
 
-/** Cheap, local, no-network check — used both before calling out and by `usher-point doctor`. */
+/**
+ * Cheap, local, no-network check — used both before calling out and by
+ * `usher-point doctor`. The key itself is resolved via config/api-key.ts's
+ * `resolveApiKey`: `process.env[cfg.apiKeyEnvVar]` wins if set, otherwise
+ * the local `~/.config/usher-point/config.json` file (written by
+ * `usher-point config set-key`) is checked before giving up.
+ */
 export function checkJevAvailability(cfg: JevModelConfig): JevAvailability {
   if (!cfg.enabled) {
     return { available: false, reason: "jevModel.enabled is false in usher-point.config.json" };
   }
-  const apiKey = process.env[cfg.apiKeyEnvVar];
+  const { value: apiKey } = resolveApiKey(cfg.apiKeyEnvVar);
   if (!apiKey) {
-    return { available: false, reason: `environment variable ${cfg.apiKeyEnvVar} is not set` };
+    return {
+      available: false,
+      reason: `environment variable ${cfg.apiKeyEnvVar} is not set (and no key found in ~/.config/usher-point/config.json — see \`usher-point config set-key\`)`,
+    };
   }
   return { available: true };
 }
@@ -192,7 +202,9 @@ export async function probeJevModel(
   if (!availability.available) {
     return { ok: false, reason: availability.reason };
   }
-  const apiKey = process.env[cfg.apiKeyEnvVar] as string;
+  // checkJevAvailability() above already confirmed resolveApiKey() returns a
+  // value for this env var name, via env or the local config file.
+  const apiKey = resolveApiKey(cfg.apiKeyEnvVar).value as string;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);

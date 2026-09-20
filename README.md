@@ -127,7 +127,9 @@ it to be useful, also make sure these are on your `PATH`:
 - `orca` — optional, only needed if you use the `orca-worktree` target.
 
 `OPENROUTER_API_KEY` is optional and only needed if you enable the Jev
-routing engine (see [How it decides](#how-it-decides)).
+routing engine (see [How it decides](#how-it-decides)). Instead of exporting
+it in every shell session, you can store it once with
+`usher-point config set-key <value>` — see [Configuration](#configuration).
 
 ## Commands
 
@@ -137,6 +139,9 @@ routing engine (see [How it decides](#how-it-decides)).
 | `usher-point route "<task>" [flags]` | Dry-run: prints the decision and the resolved command, never spawns a process |
 | `usher-point run "<task>" [flags]` | Same as `route`, then actually launches the resolved command and streams its output |
 | `usher-point doctor` | Safe, read-only PATH/liveness check; refreshes the Orca CLI reference cache; reports Jev availability |
+| `usher-point config set-key <value>` / `set-key` (stdin) | Store the Jev/OpenRouter API key locally, mode `600`; never printed |
+| `usher-point config unset-key` | Remove the locally stored key |
+| `usher-point config status` | Report whether a key is configured and its source, never the value |
 
 `usher` and `usher-point` are the same binary — both point at the same
 `dist/cli.js`. Full flags (`--repo`, `--target`, `--engine`, `--verbose`)
@@ -148,11 +153,34 @@ All routing behavior lives in
 [`usher-point.config.json`](usher-point.config.json): `targets` (base
 command + defaults per target), `rules` (ordered, first-match-wins),
 `knownRepos` (repo name → Orca worktree root), and `jevModel`
-(enable/model/API key env var). It's hand-edited and read fresh on every
-invocation — no rebuild needed. See
+(enable/model/API key env var name). It's hand-edited and read fresh on
+every invocation — no rebuild needed. See
 [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-routing-rule) for how to add
 a rule, and [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-adapter) for how
 to add a new target adapter.
+
+### The Jev/OpenRouter API key
+
+`usher-point.config.json` only names *which* environment variable to read
+the key from (`jevModel.apiKeyEnvVar`, default `OPENROUTER_API_KEY`) — it
+never stores the key itself, since that file is versioned and committed.
+Two ways to actually provide the key, checked in this order:
+
+1. **The environment variable itself** (e.g. `export OPENROUTER_API_KEY=...`)
+   — always wins if set, for an explicit per-session override.
+2. **A local, persistent file**: `~/.config/usher-point/config.json`
+   (outside the repo, never committed, mode `600`), managed with:
+
+   ```sh
+   usher-point config set-key <value>   # store it locally
+   usher-point config unset-key         # remove it
+   usher-point config status            # report presence + source only
+   ```
+
+If neither is set, the Jev engine is unavailable and `usher-point` fails
+closed to the heuristic engine, exactly as before this existed. Full detail,
+including the stdin-piping alternative to a plain CLI argument: see
+[docs/USAGE.md](docs/USAGE.md#usher-point-config).
 
 ## Status: what's actually verified
 

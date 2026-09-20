@@ -72,17 +72,29 @@ Three modules, each with one responsibility (screaming architecture — see
   `orca status --json` liveness check, refreshes the gitignored
   `orca-cli-reference.json` cache via `orca skills get orca-cli`, and reports
   whether `OPENROUTER_API_KEY` (or whatever `jevModel.apiKeyEnvVar` is
-  configured to) is set and whether a live Jev call succeeds — never printing
+  configured to) is resolvable — via the environment variable or the local
+  config file below — and whether a live Jev call succeeds — never printing
   the key itself. It never spawns a worktree or an agent.
+- `usher-point config set-key <value>` / `set-key` (stdin) / `unset-key` /
+  `status` manage a local, persistent fallback for the API key at
+  `~/.config/usher-point/config.json` (mode `600`, never committed — outside
+  the repo entirely), for when exporting the env var every session is
+  inconvenient. See `src/config/api-key.ts`.
 
 ## Hard rule: never hardcode or print the OpenRouter API key
 
-`usher-point` never stores an API key literal anywhere in code, config, or
-docs. `usher-point.config.json`'s `jevModel.apiKeyEnvVar` only names *which*
-environment variable to read (default `OPENROUTER_API_KEY`); the key itself
-is read from `process.env` at call time in `src/routing/jev-model.ts` and
-never logged, printed, or included in an error message. `usher-point doctor`
-reports only whether the variable is set, never its value.
+`usher-point` never stores an API key literal anywhere in code or in a
+committed file (`usher-point.config.json`'s `jevModel.apiKeyEnvVar` only
+names *which* environment variable to read from, default
+`OPENROUTER_API_KEY` — never the key itself). The key is resolved at call
+time by `src/config/api-key.ts`'s `resolveApiKey()`: `process.env[apiKeyEnvVar]`
+wins if set, otherwise the local, gitignored-by-location
+`~/.config/usher-point/config.json` (written only by `usher-point config
+set-key`, mode `600`) is checked. `src/routing/jev-model.ts` and `cli.ts`'s
+`doctor`/`config` commands all go through this one function — never a
+second, duplicated lookup — and never log, print, or include the value in
+an error message. `usher-point doctor` and `usher-point config status`
+report only whether/where a key is resolvable, never its value.
 
 ## Hard rule: never hardcode Orca CLI subcommand syntax
 
