@@ -1,10 +1,12 @@
 # Usage
 
 The primary way to use `usher-point` is the interactive REPL — run `usher`
-(or `usher-point`) with no arguments. For scripts and CI, the three
-subcommands remain available: `route` (dry-run), `run` (dry-run + actually
-launch), and `doctor` (safe, read-only environment check). All output below
-is real, captured from this machine after the `jev` → `usher-point` rename.
+(or `usher-point`) with no arguments. For scripts and CI, the subcommands
+remain available: `route` (dry-run), `run` (dry-run + actually launch),
+`doctor` (safe, read-only environment check), and `config`
+(`set-key`/`unset-key`/`status` — manage the local Jev/OpenRouter API key).
+All output below is real, captured from this machine after the `jev` →
+`usher-point` rename.
 
 ## Interactive mode: `usher` / `usher-point` (no arguments)
 
@@ -247,14 +249,90 @@ against `codex-cli` or `orca-worktree` was intentionally not performed here
 (sandboxed write access / real worktree creation — bigger blast radius, not
 needed to validate the shared exec path).
 
+## `usher-point config`
+
+Manages the optional Jev/OpenRouter API key locally, so it doesn't have to
+be `export`ed in every shell session. `usher-point.config.json`'s
+`jevModel.apiKeyEnvVar` (default `OPENROUTER_API_KEY`) only names *which*
+variable to read the key from — the key itself is never stored in that
+file, since it's versioned/committed. Instead, three subcommands manage a
+separate, local, gitignored-by-nature file:
+
+- **`usher-point config set-key <value>`** — writes
+  `{ "<apiKeyEnvVar>": "<value>" }` to `~/.config/usher-point/config.json`
+  (creating the `~/.config/usher-point/` directory if missing), then sets
+  the file's permissions to `600` (owner read/write only) immediately after
+  writing. Never prints, logs, or echoes the value back.
+- **`usher-point config set-key`** (no argument) — reads the value from
+  stdin instead, e.g. `echo "$MY_KEY" | usher-point config set-key`. Both
+  forms are supported; use whichever fits your setup — see the tradeoff
+  note below.
+- **`usher-point config unset-key`** — removes the key from the local file,
+  deleting the file entirely if that empties it.
+- **`usher-point config status`** — reports only whether a key is currently
+  resolvable and from which source: `environment variable`, `local config
+  file`, or `not configured`. Never the value, never even a partial/masked
+  version — same discipline as `doctor`'s API key line.
+
+**Resolution order** (used by the Jev engine, `doctor`, and `config
+status` alike, via one shared function in `src/config/api-key.ts`):
+`process.env[apiKeyEnvVar]` always wins if set (an explicit session
+override); otherwise `~/.config/usher-point/config.json` is checked; if
+neither is set, the Jev engine is unavailable and `usher-point` fails
+closed to the heuristic engine exactly as before this command existed.
+
+```
+$ usher-point config status
+OPENROUTER_API_KEY: not configured
+
+$ usher-point config set-key test-fake-key-not-real
+[ok]   OPENROUTER_API_KEY stored in /Users/juanpablorivero/.config/usher-point/config.json (mode 600, value not shown).
+
+$ ls -la ~/.config/usher-point/config.json
+-rw-------  1 juanpablorivero  staff  53 20 sept 11:25 /Users/juanpablorivero/.config/usher-point/config.json
+
+$ usher-point config status
+OPENROUTER_API_KEY: configured (local config file)
+
+$ usher-point config unset-key
+[ok]   OPENROUTER_API_KEY removed from /Users/juanpablorivero/.config/usher-point/config.json (if it was present).
+
+$ usher-point config status
+OPENROUTER_API_KEY: not configured
+```
+
+(`test-fake-key-not-real` above is a placeholder used only to verify the
+file/permissions mechanics on a machine with no real key — never a real
+secret.)
+
+### A known tradeoff: plain CLI argument vs. stdin
+
+Passing a real API key as a plain positional argument
+(`usher-point config set-key sk-...`) is the simplest option, but on a
+**shared machine**, argv is visible to other local users via `ps` (e.g.
+`ps aux | grep usher-point`) for as long as the process runs — typically a
+fraction of a second here, but not zero. If that's a concern for your
+setup, pipe the key in via stdin instead, which never appears in argv:
+
+```sh
+echo "sk-your-real-key" | usher-point config set-key
+# or, reading it interactively without it landing in shell history:
+usher-point config set-key   # then type/paste the key, Ctrl+D to submit
+```
+
+`usher-point` supports both forms rather than picking one, since the
+tradeoff (convenience vs. argv exposure) depends on the machine, not the
+tool.
+
 ## `usher-point doctor`
 
 Safe and read-only by design: checks `claude`/`codex`/`orca` resolve in
 `PATH`, does a read-only `orca status --json` liveness check, refreshes
 `orca-cli-reference.json` by running `orca skills get orca-cli`, and reports
-whether the configured OpenRouter API key env var is set and (only if it is)
-whether a live Jev call succeeds. It never spawns a worktree or an agent, and
-never prints the key's value.
+whether the API key is resolvable (env var, then the local config file
+managed by `usher-point config`) and (only if it is) whether a live Jev
+call succeeds. It never spawns a worktree or an agent, and never prints the
+key's value.
 
 ```
 $ usher-point doctor
@@ -263,8 +341,12 @@ $ usher-point doctor
 [ok]   orca -> /usr/local/bin/orca
 [ok]   orca status --json reachable (app running: false)
 [ok]   refreshed Orca CLI reference cache at /Users/juanpablorivero/dev/usher-point/orca-cli-reference.json
-[warn] OPENROUTER_API_KEY not set — Jev routing engine unavailable; usher-point still works via the heuristic engine
+[warn] OPENROUTER_API_KEY not set (checked environment variable and ~/.config/usher-point/config.json) — Jev routing engine unavailable; usher-point still works via the heuristic engine
 ```
+
+If a key is configured (via either source), that line instead reads
+`[ok]   OPENROUTER_API_KEY is configured (source: environment variable; value not shown)`
+(or `source: local config file`), followed by the live Jev call result.
 
 On this machine, `orca status --json` reached the CLI even with the Orca
 desktop app not running (`app running: false`) — `doctor` reports this as

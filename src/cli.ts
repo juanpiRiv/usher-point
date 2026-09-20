@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
+import { localConfigPath, resolveApiKey, setApiKey, unsetApiKey } from "./config/api-key";
 import { loadConfig } from "./config/load";
 import type { JevConfig, TargetConfig } from "./config/schema";
 import { classify } from "./routing/classify";
@@ -475,10 +476,102 @@ function main(): void {
       await runDoctor();
     });
 
+  const configCmd = program
+    .command("config")
+    .description(
+      "Manage the locally stored Jev/OpenRouter API key (~/.config/usher-point/config.json) — never usher-point.config.json, which is versioned"
+    );
+
+  configCmd
+    .command("set-key [value]")
+    .description(
+      "Store the API key in ~/.config/usher-point/config.json (mode 600). Omit the argument to read the value from stdin instead of argv."
+    )
+    .action((value: string | undefined) => {
+      setKeyAction(value);
+    });
+
+  configCmd
+    .command("unset-key")
+    .description("Remove the locally stored API key, if any (deletes the file if it becomes empty).")
+    .action(() => {
+      unsetKeyAction();
+    });
+
+  configCmd
+    .command("status")
+    .description("Report whether an API key is configured and its source, without ever printing the value.")
+    .action(() => {
+      configStatusAction();
+    });
+
   program.parseAsync(process.argv).catch((err) => {
     console.error((err as Error).message);
     process.exitCode = 1;
   });
+}
+
+/**
+ * `usher-point config set-key [value]` — writes `{ [apiKeyEnvVar]: value }`
+ * to ~/.config/usher-point/config.json (mode 600), using whatever
+ * `jevModel.apiKeyEnvVar` is configured to in usher-point.config.json as the
+ * JSON key name. NEVER prints, logs, or echoes the value back.
+ *
+ * The value can be given positionally (`config set-key sk-...`) or, if
+ * omitted, is read from stdin (`echo sk-... | usher-point config set-key`).
+ * Both are supported deliberately: a positional arg is the simplest path
+ * for a single-user machine, but it's visible to other local users via `ps`
+ * on a shared machine for the process's lifetime — stdin avoids that. See
+ * docs/USAGE.md for the full tradeoff.
+ */
+function setKeyAction(value: string | undefined): void {
+  const config = loadConfig();
+  const envVarName = config.jevModel.apiKeyEnvVar;
+
+  let key = value;
+  if (key === undefined) {
+    try {
+      key = fs.readFileSync(0, "utf-8").trim();
+    } catch (err) {
+      console.error(`usher-point: could not read API key from stdin: ${(err as Error).message}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  if (!key) {
+    console.error(
+      "usher-point: no API key value given — pass it as an argument (usher-point config set-key <value>) or pipe it via stdin."
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  setApiKey(envVarName, key);
+  console.log(`[ok]   ${envVarName} stored in ${localConfigPath()} (mode 600, value not shown).`);
+}
+
+/** `usher-point config unset-key` — removes the key; never prints its value. */
+function unsetKeyAction(): void {
+  const config = loadConfig();
+  const envVarName = config.jevModel.apiKeyEnvVar;
+  unsetApiKey(envVarName);
+  console.log(`[ok]   ${envVarName} removed from ${localConfigPath()} (if it was present).`);
+}
+
+/**
+ * `usher-point config status` — presence/source only, exactly as safe as
+ * `doctor`'s discipline: never the value, never even partial/masked.
+ */
+function configStatusAction(): void {
+  const config = loadConfig();
+  const envVarName = config.jevModel.apiKeyEnvVar;
+  const resolution = resolveApiKey(envVarName);
+  if (resolution.source === "not configured") {
+    console.log(`${envVarName}: not configured`);
+  } else {
+    console.log(`${envVarName}: configured (${resolution.source})`);
+  }
 }
 
 async function runDoctor(): Promise<void> {
@@ -513,15 +606,19 @@ async function runDoctor(): Promise<void> {
   // Jev (TypeSafe AI) routing engine — read-only, no-side-effects check, same
   // philosophy as the Orca liveness check above. Never a [fail]: usher-point
   // always still works via the heuristic engine if this is unavailable.
+  // Resolution (env var, then ~/.config/usher-point/config.json, then
+  // "not configured") is centralized in config/api-key.ts's resolveApiKey —
+  // the exact same function `usher-point config status` uses, so this never
+  // duplicates the lookup.
   const config = loadConfig();
   const apiKeyEnvVar = config.jevModel.apiKeyEnvVar;
-  const apiKey = process.env[apiKeyEnvVar];
-  if (!apiKey) {
+  const resolution = resolveApiKey(apiKeyEnvVar);
+  if (resolution.source === "not configured") {
     console.log(
-      `[warn] ${apiKeyEnvVar} not set — Jev routing engine unavailable; usher-point still works via the heuristic engine`
+      `[warn] ${apiKeyEnvVar} not set (checked environment variable and ~/.config/usher-point/config.json) — Jev routing engine unavailable; usher-point still works via the heuristic engine`
     );
   } else {
-    console.log(`[ok]   ${apiKeyEnvVar} is set (value not shown)`);
+    console.log(`[ok]   ${apiKeyEnvVar} is configured (source: ${resolution.source}; value not shown)`);
     try {
       // Force enabled:true for this probe only, so the live-key check isn't
       // gated on jevModel.enabled in the config — it's testing the key/model,
