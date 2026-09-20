@@ -32,7 +32,7 @@ named `jev`.
 - Build: `npm run build`
 - Verify routing:
   - `usher-point route "fix a typo in README"` → `claude-inline`
-  - `usher-point route "implement a new multi-file feature across the takenos-data-stack repo"` → `orca-worktree`
+  - `usher-point route "implement a new multi-file feature across the my-data-warehouse repo"` → `orca-worktree`
   - `usher-point route "anything" --target codex-cli` → explicit target wins
 - `usher-point doctor` — safe, read-only PATH/liveness check + Orca reference
   cache refresh. Never spawns a worktree or agent.
