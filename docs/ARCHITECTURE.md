@@ -99,26 +99,49 @@ flowchart LR
 ```
 
 `orca-adapter.ts`'s extraction is a conservative heuristic: it scans the
-cached reference text for a line that looks like a literal
-`orca <subcommand> ...` worktree-spawn invocation. If it can't find one, it
-leaves `spawnCommandTemplate` undefined rather than guessing, and any
-attempt to route to `orca-worktree` fails closed with a
-"run `usher-point doctor`" message.
+cached reference text for a line that looks like an `orca <subcommand> ...`
+worktree-spawn invocation. If it can't find one, it leaves
+`spawnCommandTemplate` undefined rather than guessing, and any attempt to
+route to `orca-worktree` fails closed with a "run `usher-point doctor`"
+message.
 
-**Observed discrepancy vs. the original design plan
-(`inherited-cooking-owl.md`):** in the version of the `orca-cli` skill
-reference installed on this machine, the documented commands use an
+**Resolved discrepancy vs. the original design plan
+(`inherited-cooking-owl.md`):** the version of the `orca-cli` skill
+reference installed on this machine documents its example commands with an
 uppercase `ORCA` placeholder (e.g. `ORCA worktree create ...`), not a
-literal lowercase `orca` command line. `orca-adapter.ts`'s heuristic only
-matches lines starting with lowercase `orca `, so on this machine
-`usher-point doctor` refreshes the cache successfully but extracts no
-`spawnCommandTemplate`, and `orca-worktree` routing currently always fails
-closed — this was confirmed by running `doctor` and re-running the
-`orca-worktree` verification case (see `docs/USAGE.md`). This is exactly
-the fail-closed behavior the design intends (no hardcoded guess), but it
-means the orca-worktree target is not currently reachable end-to-end on
-this machine without a change to the extraction heuristic or the upstream
-skill doc.
+literal lowercase `orca` command line — the skill's own "Start Here" section
+explains this explicitly: "`ORCA` is a documentation placeholder. Replace it
+with the chosen executable before running the command." The original
+heuristic only matched lines starting with a literal lowercase `orca `, so
+on this machine `usher-point doctor` refreshed the cache successfully but
+extracted no `spawnCommandTemplate`, and `orca-worktree` routing always
+failed closed — confirmed by running `doctor` and re-running the
+`orca-worktree` verification case.
+
+This has since been fixed: `extractSpawnCommandTemplate()` now (1) matches
+the leading `orca`/`ORCA` token case-insensitively — safe because
+`buildOrcaCommand` already discards that first token and substitutes the
+real resolved binary, so this is still pure parsing of Orca's own
+documented syntax, never a hardcoded guess; (2) requires an actual
+`worktree create` (or `spawn`) subcommand rather than matching any line
+that merely contains the word "worktree", since the same reference text
+also documents worktree *management* commands (`worktree ps`, `worktree
+list`, `worktree rm`, ...) that would otherwise be matched first; and (3)
+tokenizes quoted example values (`--prompt "<task brief>"`) as a single
+token instead of splitting on the space inside the quotes. Re-running the
+`orca-worktree` verification case after this fix now resolves a real
+command (see `docs/USAGE.md`) instead of failing closed.
+
+One caveat remains, and is *not* a bug: the cached reference's own example
+values are illustrative placeholders (`<task-name>`, `"<task brief>"`), not
+`usher-point`'s `{{task}}`/`{{cwd}}`/`{{repo}}`/`{{agent}}` token syntax, so
+`buildOrcaCommand`'s substitution step has nothing to replace in this
+particular line and the resolved command still carries the doc's own
+example text rather than the live task's values. Mapping `<...>`-style doc
+placeholders to specific flags would itself be exactly the kind of
+hardcoded assumption about Orca's syntax this module is designed to avoid,
+so it was deliberately left alone — this is a known, honestly-documented
+limitation, not a silently-forced success.
 
 ## Other discrepancies vs. the original design plan
 
