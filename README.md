@@ -139,6 +139,7 @@ it in every shell session, you can store it once with
 | `usher-point route "<task>" [flags]` | Dry-run: prints the decision and the resolved command, never spawns a process |
 | `usher-point run "<task>" [flags]` | Same as `route`, then actually launches the resolved command and streams its output |
 | `usher-point doctor` | Safe, read-only PATH/liveness check; refreshes the Orca CLI reference cache; reports Jev availability |
+| `usher-point watch [--repo <name>]` | Read-only: polls `orca worktree ps`/`orca terminal list` and shows live worktree/agent status until Ctrl+C — visibility into an `orca-worktree` run that `run` itself doesn't provide, since `run` only dispatches and exits |
 | `usher-point config set-key <value>` / `set-key` (stdin) | Store the Jev/OpenRouter API key locally, mode `600`; never printed |
 | `usher-point config unset-key` | Remove the locally stored key |
 | `usher-point config status` | Report whether a key is configured and its source, never the value |
