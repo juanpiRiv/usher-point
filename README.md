@@ -1,27 +1,80 @@
 # usher-point
 
-`usher-point` is a small, on-demand local CLI that decides *where* a task should run —
-Claude Code inline, Codex CLI (with a sandbox), or an isolated Orca worktree —
-and, optionally, dispatches it there. It is never a daemon; every invocation
-is a one-shot decision.
+`usher-point` is a small, on-demand CLI that decides **where** a task should
+run — inline in Claude Code, via Codex CLI in a sandbox, or in an isolated
+Orca worktree — and, optionally, which skills and model to use for it. It
+then dispatches the task there. It is never a daemon: every invocation is a
+one-shot decision, and it can also just print the decision without running
+anything (`route`).
 
-`usher-point` never does the agent's work itself. It classifies the task text (plus
-any flags) into a `TaskShape`, walks the rules in `usher-point.config.json` in order
-(first match wins), and either prints the decision (`usher-point route`) or actually
-launches the resolved command (`usher-point run`).
+**`usher-point` does not do the agent's actual work itself.** It classifies
+the task text (plus any flags) into a `TaskShape`, decides a target, and
+hands off to `claude`, `codex`, or `orca` to do the real work.
 
-The binary is installed under two names — `usher` (short) and `usher-point`
-(the full package name) — both point at the same `dist/cli.js`. Run either
-bare, with no arguments, to get an interactive prompt (see below); pass a
-subcommand (`route`/`run`/`doctor`) for one-shot/scripted use.
+> Previously named `jev` during early scaffolding. `usher-point` (this CLI)
+> and **Jev** (an unrelated, real, third-party AI model it can *optionally*
+> call — see [How it decides](#how-it-decides)) share a name by coincidence
+> only.
 
-> This project was previously named `jev` during scaffolding. The binary,
-> package name, and config filename are now all `usher-point`; a leftover
-> `jev.config.json` is still picked up as a fallback for one release if
-> `usher-point.config.json` isn't found (see `src/config/load.ts`). To avoid
-> confusion: **`usher-point` is this CLI**; **`Jev`** (below) is an unrelated,
-> real, third-party AI model this CLI can *optionally* call — the old
-> scaffolding name and the third-party model name are just a coincidence.
+## Quick start
+
+1. Install it — see [Installation](#installation).
+2. Run `usher` bare for an interactive prompt:
+
+   ```
+   $ usher
+   usher-point v0.1.0 — interactive mode.
+   Type a task description, or "exit"/"quit"/Ctrl+D to leave.
+
+   usher> fix a typo in README
+   task:   "fix a typo in README"
+   rule:   quick-inline
+   via:    heuristic-fallback (jev-model unavailable)
+   target: claude-inline
+   skills: migrating-dbt-project-across-platforms (score 1, fallback)
+   command: claude -p "fix a typo in README" --allowedTools migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero/dev/usher-point
+   Run this? [y/N] n
+   usher> exit
+
+   Goodbye.
+   ```
+
+3. Or, for scripts/CI, use the one-shot `route` subcommand (dry-run, never
+   spawns a process):
+
+   ```
+   $ usher-point route "fix a typo in README"
+   task:   "fix a typo in README"
+   rule:   quick-inline
+   target: claude-inline
+   skills: gh-fix-ci (score 1, registry), judgment-day (score 1, registry), migrating-dbt-project-across-platforms (score 1, registry)
+   command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
+   ```
+
+Both examples are real, captured output — see [docs/USAGE.md](docs/USAGE.md)
+for the full set (multi-file/multi-repo routing, `--engine` variants,
+`doctor` output, REPL smoke tests).
+
+## How it decides
+
+Two decision engines, picked with `--engine` (an explicit `--target` flag
+always wins outright, before either one runs):
+
+- **Heuristic (default)** — `classify.ts` turns the task text + flags into a
+  `TaskShape`; `decide.ts` walks the ordered, first-match-wins `rules` in
+  [`usher-point.config.json`](usher-point.config.json); an unmatched task
+  falls back to `claude-inline`. No network calls, no ML — every signal is
+  an inspectable keyword/flag check (`usher-point route --verbose` prints
+  the full `TaskShape` and which rule matched).
+- **Jev (`--engine jev`)** — optionally calls TypeSafe AI's "Jev" model via
+  OpenRouter, which returns **target + relevant skills + an optional
+  model/effort override in one call**. `--engine auto` (default) tries Jev
+  first and fails closed to the heuristic on any problem (disabled, no key,
+  network error, bad reply); `--engine jev` fails loudly instead of silently
+  falling back, since you asked for it explicitly.
+
+Full flow diagrams and module responsibilities:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Installation
 
@@ -42,8 +95,9 @@ npm link
 
 `npm link` makes `usher`/`usher-point` resolve globally to this checkout's
 `dist/cli.js`. While editing, run `npm run dev` (a `tsc --watch`) in a spare
-terminal to rebuild on save — no need to re-link. See `CONTRIBUTING.md` for
-the full dev workflow, engineering conventions, and how to add rules/adapters.
+terminal to rebuild on save — no need to re-link. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full dev workflow, engineering
+conventions, and how to add rules/adapters.
 
 ### Install as a CLI (no cloning)
 
@@ -73,148 +127,60 @@ it to be useful, also make sure these are on your `PATH`:
 - `orca` — optional, only needed if you use the `orca-worktree` target.
 
 `OPENROUTER_API_KEY` is optional and only needed if you enable the Jev
-routing engine (see below).
+routing engine (see [How it decides](#how-it-decides)).
 
-## Interactive mode (primary way to use it)
+## Commands
 
-Run `usher` (or `usher-point` — both resolve to the same binary) with no
-arguments and it opens an interactive loop, the same pattern as `claude` with
-no args opening a chat session:
+| Command | What it does |
+|---|---|
+| `usher` (bare, no args) | Interactive REPL — type a task, review the decision, confirm `[y/N]` to run it |
+| `usher-point route "<task>" [flags]` | Dry-run: prints the decision and the resolved command, never spawns a process |
+| `usher-point run "<task>" [flags]` | Same as `route`, then actually launches the resolved command and streams its output |
+| `usher-point doctor` | Safe, read-only PATH/liveness check; refreshes the Orca CLI reference cache; reports Jev availability |
 
-```
-$ usher
-usher-point v0.1.0 — interactive mode.
-Type a task description, or "exit"/"quit"/Ctrl+D to leave.
+`usher` and `usher-point` are the same binary — both point at the same
+`dist/cli.js`. Full flags (`--repo`, `--target`, `--engine`, `--verbose`)
+and captured examples for every command: [docs/USAGE.md](docs/USAGE.md).
 
-usher> fix a typo in README
-task:   "fix a typo in README"
-rule:   quick-inline
-via:    heuristic-fallback (jev-model unavailable)
-target: claude-inline
-skills: gh-fix-ci (score 1, registry)
-command: claude -p "fix a typo in README" --allowedTools gh-fix-ci --add-dir /path/to/repo
-Run this? [y/N] n
-usher> exit
+## Configuration
 
-Goodbye.
-```
+All routing behavior lives in
+[`usher-point.config.json`](usher-point.config.json): `targets` (base
+command + defaults per target), `rules` (ordered, first-match-wins),
+`knownRepos` (repo name → Orca worktree root), and `jevModel`
+(enable/model/API key env var). It's hand-edited and read fresh on every
+invocation — no rebuild needed. See
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-routing-rule) for how to add
+a rule, and [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-new-adapter) for how
+to add a new target adapter.
 
-Type a task description at the `usher> ` prompt, review the routing decision
-it prints (identical output to `usher route`), then answer the `Run this?
-[y/N]` confirmation — `y`/`yes` actually launches the resolved command and
-streams its output; anything else (including empty input) returns you to the
-prompt without running it. `exit`, `quit`, Ctrl+D (EOF), or Ctrl+C all leave
-cleanly. You can append `--repo`, `--target`, or `--engine` inline after your
-task text (e.g. `usher> implement X --target codex-cli`) — the same flags
-`route`/`run` accept as separate CLI flags.
+## Status: what's actually verified
 
-## One-shot commands (scripting / explicit use)
+This project is young and honest about it:
 
-For scripts, CI, or explicit one-shot invocations, use the `route`/`run`/
-`doctor` subcommands directly — these are unchanged and remain fully
-scriptable.
+- **`usher-point run` (real execution)** — dry-run-verified (`route`'s
+  output has been checked against expectations for all three targets) but
+  **not** exhaustively battle-tested actually launching every real target
+  end-to-end.
+- **The Jev/OpenRouter engine** — implemented and unit-verified with a
+  mocked OpenRouter response, including its fail-closed-to-heuristic path,
+  but **never exercised with a real API key on this machine** — there is no
+  `OPENROUTER_API_KEY` configured here. `--engine jev`'s "unavailable" error
+  path *has* been verified for real (see docs/USAGE.md).
+- **The Orca-worktree path** — depends on a cached CLI reference
+  (`orca-cli-reference.json`) that `usher-point doctor` refreshes; if
+  Orca's own CLI syntax has drifted since that cache was captured, routing
+  to `orca-worktree` fails closed with a "run `usher-point doctor`" error
+  rather than guessing. On this machine, the currently-cached reference
+  doesn't expose a syntax `orca-adapter.ts` can confidently extract, so
+  `orca-worktree` isn't reachable end-to-end here right now — see
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-orca-worktree-path-most-fragile-boundary)
+  for the exact discrepancy.
 
-### `usher-point route "<task>" [--repo <name>] [--target <target>] [--worktree] [--verbose] [--engine <heuristic|jev|auto>]`
+This matches the project's own design philosophy: fail closed, be explicit,
+never guess.
 
-Dry-run (the default way to use usher-point). Prints:
-- which engine decided (`via:`) and, for the heuristic, which rule matched
-  (or `explicit-target-flag` / `fallback-claude-inline`)
-- the resolved target (`claude-inline`, `codex-cli`, or `orca-worktree`)
-- the exact command that would run
-- which skills (paths to `SKILL.md`, never their content) look relevant
+## License & contributing
 
-Never spawns a process.
-
-### `usher-point run "<task>" [same flags]`
-
-Does everything `route` does, then actually launches `claude`, `codex`, or
-`orca` as a subprocess and streams its output. Exits with that subprocess's
-exit code.
-
-### `usher-point doctor`
-
-Checks that `claude`, `codex`, and `orca` resolve in `PATH`, does a read-only
-`orca status --json` liveness check, refreshes the local
-`orca-cli-reference.json` cache (gitignored) by running `orca skills get
-orca-cli`, and reports whether the Jev routing engine is usable (see below).
-`usher-point` never hardcodes Orca's own subcommand syntax — it changes
-between Orca releases — so the real worktree-spawn command is only ever read
-from this cache. If the cache is missing or stale, run `usher-point doctor`
-again.
-
-## Optional: routing via TypeSafe AI's "Jev" model
-
-By default, `usher-point` decides where to route a task with the local,
-hand-written heuristic in `src/routing/classify.ts` + `decide.ts`, and which
-skills are relevant with `src/skills/select.ts`'s keyword-overlap ranking —
-plain keyword/flag checks, no network calls, no ML. Optionally, it can
-instead ask **TypeSafe AI's "Jev"** model — a real third-party "System One
-Model" purpose-built for fast structured/typed decisions (routing,
-classification), not general chat — to make **one unified decision** covering
-target, skills, *and* an optional model/effort override, in a single call.
-`usher-point` reaches it only through **OpenRouter's** standard
-chat-completions API (`https://openrouter.ai/api/v1/chat/completions`), using
-your own OpenRouter API key. `usher-point` never talks to
-`docs.typesafe.ai`/`console.typesafe.ai` directly and never stores or prints
-your API key.
-
-This unification only applies when the Jev engine actually decides: Jev is
-shown the same candidate skill list the heuristic path would rank (gathered
-by `skills/select.ts`'s `gatherSkillCandidates()`, capped for prompt size by
-`capCandidates()` if unusually large) and returns which of them it judges
-relevant, replacing the keyword-overlap step for that call. Any Jev failure —
-disabled, no key, network error, malformed reply — falls back to the
-heuristic **and** `skills/select.ts` together, never a mixed decision. See
-`docs/ARCHITECTURE.md` for the full flow and `docs/USAGE.md` for illustrative
-(untested — no API key on this machine) example output.
-
-To enable it:
-
-1. Get an OpenRouter API key (see `openrouter.ai/typesafe` for the Jev model
-   listing) and export it: `export OPENROUTER_API_KEY=sk-...` (see
-   `env.example` for the variable name — named without the usual leading dot
-   because this environment's own tool permissions hard-deny writing `.env*`
-   files). `usher-point` itself never reads a `.env` file — it only reads
-   `process.env` at call time.
-2. In `usher-point.config.json`, set `"jevModel": { "enabled": true, ... }`.
-   `model` defaults to `"typesafe/jev-1.13"` (pinned) — `"typesafe/jev-latest"`
-   is also valid. `apiKeyEnvVar` defaults to `"OPENROUTER_API_KEY"` and can be
-   changed if you keep the key under a different variable name.
-
-Behavior:
-- **`--engine auto`** (default) — try Jev first; on *any* failure (disabled,
-  no key, network error, bad HTTP status, unparseable reply) it fails closed
-  to the local heuristic, and `route`/`run` print which engine actually
-  decided (e.g. `via: heuristic-fallback (jev-model unavailable)` or
-  `via: jev-model (typesafe/jev-1.13)`).
-- **`--engine heuristic`** — always use the local rules, never call OpenRouter.
-- **`--engine jev`** — always call Jev; if it's unavailable for any reason,
-  this fails loudly with a clear error instead of silently substituting the
-  heuristic, since you explicitly asked for Jev.
-
-`usher-point` never crashes because Jev is unavailable — the local heuristic
-remains the default and the fallback path in `--engine auto`.
-
-## Editing `usher-point.config.json`
-
-This file is the entire ruleset and is meant to be hand-edited:
-
-- **`targets`** — the base command + defaults for each of the three targets
-  (`claudeInline`, `codexCli`, `orcaWorktree`).
-- **`rules`** — an ordered list. Each rule has a `when` clause (`multiFile`,
-  `multiRepo`, `needsIsolation` — omit a field to make it a wildcard) and a
-  `target`. The first rule whose `when` clause matches the task wins. If
-  nothing matches, usher-point falls back to `claudeInline` (the
-  cheapest/safest option). An explicit `--target` flag on the CLI always
-  wins outright, before any rule is consulted.
-- **`knownRepos`** — maps a repo name to its Orca worktree root
-  (`~` is expanded to your home directory). Mentioning a known repo's name in
-  the task text, or passing `--repo <name>`, marks the task as multi-repo and
-  triggers isolation.
-
-To add a new rule or repo, just add an entry and re-run `usher-point route` —
-no rebuild needed, since `usher-point.config.json` is read (and zod-validated)
-fresh on every invocation from the package root.
-
-See `docs/ARCHITECTURE.md` for the module layout and `docs/USAGE.md` for
-real example invocations.
+Contributions, dev workflow, and engineering conventions:
+[CONTRIBUTING.md](CONTRIBUTING.md). Licensed under [MIT](LICENSE).
