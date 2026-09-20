@@ -10,13 +10,18 @@ npm run build
 npm link
 ```
 
-`npm link` installs the `usher-point` binary globally (resolves via
-`npm config get prefix`, e.g. `~/.local/bin`), pointing at
-`dist/cli.js`. Run `which usher-point` to confirm it resolves to this
-checkout. To undo: `npm unlink -g usher-point`.
+`npm link` installs two binaries globally — `usher` (short) and
+`usher-point` (full) — both resolving via `npm config get prefix` (e.g.
+`~/.local/bin`) to the same `dist/cli.js`. Run `which usher` and
+`which usher-point` to confirm both resolve to this checkout. To undo:
+`npm unlink -g usher-point` (removes both names, since they share one
+package).
 
 There is no test suite yet. The closest thing to a regression check is
-re-running the three routing scenarios below plus `usher-point doctor`.
+re-running the three routing scenarios below plus `usher-point doctor`, and
+smoke-testing the interactive REPL by piping stdin, e.g.
+`printf 'fix a typo in README\nn\nexit\n' | usher` — see `docs/USAGE.md` for
+the full REPL smoke-test commands.
 
 ## Adding a new routing rule
 

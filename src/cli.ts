@@ -1,5 +1,8 @@
 import { Command } from "commander";
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import * as readline from "node:readline";
 import { loadConfig } from "./config/load";
 import type { JevConfig } from "./config/schema";
 import { classify } from "./routing/classify";
@@ -184,7 +187,172 @@ function printPlan(
   }
 }
 
+function readVersion(): string {
+  try {
+    const pkgPath = path.join(__dirname, "..", "package.json");
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as { version?: string };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+/**
+ * Splits one REPL input line into a task description plus the three flags the
+ * interactive loop supports inline (--repo, --target, --engine — the same
+ * flags `route`/`run` accept). This is a deliberately minimal, purpose-built
+ * split, not a second copy of commander's parser: a REPL line arrives as
+ * plain text (no shell involved), so there is no quoting/escaping to
+ * reproduce — tokens are just whitespace-separated.
+ */
+function parseReplLine(line: string): { taskText: string; flags: SharedFlags } {
+  const tokens = line.split(/\s+/).filter((t) => t.length > 0);
+  const flags: SharedFlags = {};
+  const remaining: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const next = tokens[i + 1];
+    if (tok === "--repo" && next !== undefined) {
+      flags.repo = next;
+      i++;
+    } else if (tok === "--target" && next !== undefined) {
+      flags.target = next;
+      i++;
+    } else if (tok === "--engine" && next !== undefined) {
+      flags.engine = next;
+      i++;
+    } else {
+      remaining.push(tok as string);
+    }
+  }
+
+  return { taskText: remaining.join(" "), flags };
+}
+
+/**
+ * Interactive REPL for bare `usher`/`usher-point` invocations (no subcommand,
+ * no args) — the same UX pattern as `claude` with no args opening a chat
+ * session. Reuses `resolveRoute`/`printPlan`/`buildCommandSpec`/`runCommand`
+ * exactly as `route`/`run` do; it does not duplicate routing, formatting, or
+ * execution logic. `route`/`run`/`doctor` remain unchanged for scripted use.
+ */
+function runRepl(): void {
+  const config = loadConfig();
+  const cwd = process.cwd();
+
+  console.log(`usher-point v${readVersion()} — interactive mode.`);
+  console.log('Type a task description, or "exit"/"quit"/Ctrl+D to leave.\n');
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.setPrompt("usher> ");
+  // readline only intercepts Ctrl+C as an interface-level "SIGINT" event when
+  // stdin is an interactive TTY in raw mode; on a piped/non-TTY stdin (or a
+  // signal sent directly to the process) Node's default SIGINT handling would
+  // otherwise terminate with a signal exit code, so handle both.
+  rl.on("SIGINT", () => rl.close());
+  process.on("SIGINT", () => rl.close());
+
+  // Set between printing a decision and reading the y/N confirmation for it.
+  let pending: { decision: Decision; skills: SkillMatch[]; taskText: string } | null = null;
+
+  rl.prompt();
+
+  // readline emits every already-buffered "line" event synchronously as soon
+  // as a chunk arrives (pause()/resume() only affects *future* reads, not
+  // lines already parsed out of the current chunk) — piped stdin routinely
+  // delivers several lines in one chunk. Queue lines and drain them one at a
+  // time so an earlier line's async routing/run work always finishes before
+  // a later line (e.g. "exit") is handled.
+  let closed = false;
+  const queue: string[] = [];
+  let draining = false;
+
+  async function drainQueue(): Promise<void> {
+    if (draining) return;
+    draining = true;
+    while (queue.length > 0 && !closed) {
+      const rawLine = queue.shift() as string;
+      await handleLine(rawLine);
+    }
+    draining = false;
+  }
+
+  rl.on("line", (rawLine: string) => {
+    queue.push(rawLine);
+    void drainQueue();
+  });
+
+  rl.on("close", () => {
+    closed = true;
+    console.log("\nGoodbye.");
+    process.exit(0);
+  });
+
+  function safePrompt(): void {
+    if (!closed) rl.prompt();
+  }
+
+  async function handleLine(rawLine: string): Promise<void> {
+    const line = rawLine.trim();
+
+    if (pending) {
+      const { decision, skills, taskText } = pending;
+      pending = null;
+      const answer = line.toLowerCase();
+      if (answer === "y" || answer === "yes") {
+        try {
+          const spec = buildCommandSpec(config, decision, taskText, cwd, skills);
+          console.log(`\n> launching: ${formatCommand(spec)}\n`);
+          const exitCode = await runCommand(spec);
+          console.log(`(exited with code ${exitCode})`);
+        } catch (err) {
+          console.error((err as Error).message);
+        }
+      }
+      rl.setPrompt("usher> ");
+      safePrompt();
+      return;
+    }
+
+    if (line === "") {
+      safePrompt();
+      return;
+    }
+    if (line === "exit" || line === "quit") {
+      rl.close();
+      return;
+    }
+
+    const { taskText, flags } = parseReplLine(line);
+    if (!taskText) {
+      console.log("usher-point: please enter a task description.");
+      safePrompt();
+      return;
+    }
+
+    try {
+      const { shape, decision, skills, via } = await resolveRoute(taskText, flags, config, cwd);
+      printPlan(taskText, cwd, config, shape, decision, skills, false, via);
+      pending = { decision, skills, taskText };
+      rl.setPrompt("Run this? [y/N] ");
+      safePrompt();
+    } catch (err) {
+      console.error((err as Error).message);
+      rl.setPrompt("usher> ");
+      safePrompt();
+    }
+  }
+}
+
 function main(): void {
+  if (process.argv.length <= 2) {
+    // Bare `usher`/`usher-point` — no subcommand, no args — starts the
+    // interactive REPL instead of commander's default help/error output.
+    runRepl();
+    return;
+  }
+
   const program = new Command();
   program.name("usher-point").description("Decide and dispatch a task to claude / codex / orca.");
 

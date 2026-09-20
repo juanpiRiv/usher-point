@@ -10,6 +10,11 @@ any flags) into a `TaskShape`, walks the rules in `usher-point.config.json` in o
 (first match wins), and either prints the decision (`usher-point route`) or actually
 launches the resolved command (`usher-point run`).
 
+The binary is installed under two names — `usher` (short) and `usher-point`
+(the full package name) — both point at the same `dist/cli.js`. Run either
+bare, with no arguments, to get an interactive prompt (see below); pass a
+subcommand (`route`/`run`/`doctor`) for one-shot/scripted use.
+
 > This project was previously named `jev` during scaffolding. The binary,
 > package name, and config filename are now all `usher-point`; a leftover
 > `jev.config.json` is still picked up as a fallback for one release if
@@ -18,7 +23,44 @@ launches the resolved command (`usher-point run`).
 > real, third-party AI model this CLI can *optionally* call — the old
 > scaffolding name and the third-party model name are just a coincidence.
 
-## Commands
+## Interactive mode (primary way to use it)
+
+Run `usher` (or `usher-point` — both resolve to the same binary) with no
+arguments and it opens an interactive loop, the same pattern as `claude` with
+no args opening a chat session:
+
+```
+$ usher
+usher-point v0.1.0 — interactive mode.
+Type a task description, or "exit"/"quit"/Ctrl+D to leave.
+
+usher> fix a typo in README
+task:   "fix a typo in README"
+rule:   quick-inline
+via:    heuristic-fallback (jev-model unavailable)
+target: claude-inline
+skills: gh-fix-ci (score 1, registry)
+command: claude -p "fix a typo in README" --allowedTools gh-fix-ci --add-dir /path/to/repo
+Run this? [y/N] n
+usher> exit
+
+Goodbye.
+```
+
+Type a task description at the `usher> ` prompt, review the routing decision
+it prints (identical output to `usher route`), then answer the `Run this?
+[y/N]` confirmation — `y`/`yes` actually launches the resolved command and
+streams its output; anything else (including empty input) returns you to the
+prompt without running it. `exit`, `quit`, Ctrl+D (EOF), or Ctrl+C all leave
+cleanly. You can append `--repo`, `--target`, or `--engine` inline after your
+task text (e.g. `usher> implement X --target codex-cli`) — the same flags
+`route`/`run` accept as separate CLI flags.
+
+## One-shot commands (scripting / explicit use)
+
+For scripts, CI, or explicit one-shot invocations, use the `route`/`run`/
+`doctor` subcommands directly — these are unchanged and remain fully
+scriptable.
 
 ### `usher-point route "<task>" [--repo <name>] [--target <target>] [--worktree] [--verbose] [--engine <heuristic|jev|auto>]`
 

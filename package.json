@@ -5,7 +5,8 @@
   "private": true,
   "type": "commonjs",
   "bin": {
-    "usher-point": "./dist/cli.js"
+    "usher-point": "./dist/cli.js",
+    "usher": "./dist/cli.js"
   },
   "files": [
     "dist",

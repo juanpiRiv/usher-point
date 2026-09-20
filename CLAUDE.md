@@ -48,10 +48,25 @@ Three modules, each with one responsibility (screaming architecture — see
 
 - `npm run build` — `tsc -p tsconfig.json` then a small shebang-injection
   script for `dist/cli.js`. No test suite exists yet.
-- After building and `npm link`, the three verification commands are:
+- The binary is linked under two names, `usher` (short) and `usher-point`
+  (full) — both point at the same `dist/cli.js`. After building, `npm link`
+  once makes both resolve; confirm with `which usher` and `which usher-point`.
+- After building and `npm link`, the three one-shot verification commands are:
   - `usher-point route "fix a typo in README"` → expect target `claude-inline`
   - `usher-point route "implement a new multi-file feature across the my-data-warehouse repo"` → expect target `orca-worktree`
   - `usher-point route "anything" --target codex-cli` → expect the explicit `--target` flag to win
+- The interactive REPL (bare `usher`/`usher-point`, no subcommand) can't be
+  verified by running it and waiting — smoke-test it by piping stdin and
+  checking the output and exit code:
+  - `printf 'fix a typo in README\nn\nexit\n' | usher` → expect the banner,
+    the routing decision, the `Run this? [y/N]` prompt honoring `n` (no
+    execution), and a clean exit code `0` after `exit`.
+  - `printf 'implement a new multi-file feature across the my-data-warehouse repo\nn\n' | usher`
+    (no explicit `exit`) → expect it to exit cleanly (code `0`) on stdin EOF
+    rather than hang.
+  - Always answer `n` (or let EOF end the session) in these smoke tests —
+    answering `y` launches a real `claude`/`codex`/`orca` subprocess exactly
+    like `usher-point run` does.
 - `usher-point doctor` is safe and read-only by design: it checks
   `claude`/`codex`/`orca` resolve in `PATH`, does a read-only
   `orca status --json` liveness check, refreshes the gitignored

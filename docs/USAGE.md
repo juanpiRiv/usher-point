@@ -1,8 +1,69 @@
 # Usage
 
-Three commands: `route` (dry-run), `run` (dry-run + actually launch), and
-`doctor` (safe, read-only environment check). All output below is real,
-captured from this machine after the `jev` → `usher-point` rename.
+The primary way to use `usher-point` is the interactive REPL — run `usher`
+(or `usher-point`) with no arguments. For scripts and CI, the three
+subcommands remain available: `route` (dry-run), `run` (dry-run + actually
+launch), and `doctor` (safe, read-only environment check). All output below
+is real, captured from this machine after the `jev` → `usher-point` rename.
+
+## Interactive mode: `usher` / `usher-point` (no arguments)
+
+Bare invocation — no subcommand, no args — starts an interactive loop
+instead of printing help, the same pattern as `claude` with no args opening
+a chat session. It's read one line at a time via Node's built-in `readline`;
+each non-empty line is routed through the exact same `resolveRoute()`
+resolution and `printPlan()` formatting that `route` uses (no second
+implementation), followed by a `Run this? [y/N]` confirmation that, on
+`y`/`yes`, executes the resolved command through the same `exec/run-command.ts`
+path that `run` uses.
+
+```
+$ usher
+usher-point v0.1.0 — interactive mode.
+Type a task description, or "exit"/"quit"/Ctrl+D to leave.
+
+usher> fix a typo in README
+task:   "fix a typo in README"
+rule:   quick-inline
+via:    heuristic-fallback (jev-model unavailable)
+target: claude-inline
+skills: migrating-dbt-project-across-platforms (score 1, fallback)
+command: claude -p "fix a typo in README" --allowedTools migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero/dev/usher-point
+Run this? [y/N] n
+usher> exit
+
+Goodbye.
+```
+
+Notes:
+- `exit`, `quit`, empty input at EOF (Ctrl+D), and Ctrl+C all leave cleanly
+  with exit code `0` — no crash, no stack trace.
+- An empty line (just pressing Enter) is ignored and returns to the prompt;
+  it does not exit the loop.
+- `--repo`, `--target`, and `--engine` can be typed inline after the task
+  text on the same line (e.g. `usher> implement X --target codex-cli`) — a
+  minimal, purpose-built split for just these three flags (`parseReplLine` in
+  `src/cli.ts`), not a second copy of commander's parser, since a REPL line
+  has no shell quoting to reproduce.
+- Answering anything other than `y`/`yes` (including a blank line) to `Run
+  this? [y/N]` returns to the `usher> ` prompt without executing anything.
+
+### Smoke-testing the REPL (no test suite exists yet)
+
+Since a REPL can't be verified by just running it and waiting, pipe stdin
+and check the output plus exit code:
+
+```sh
+printf 'fix a typo in README\nn\nexit\n' | usher
+echo "exit code: $?"   # expect 0, and the routing decision printed before the "n" prompt
+
+printf 'implement a new multi-file feature across the my-data-warehouse repo\nn\n' | usher
+echo "exit code: $?"   # expect 0 — EOF (no explicit "exit") must still end the loop cleanly, not hang
+```
+
+Always answer `n` (or let EOF end the session before answering) when testing
+this way — the REPL's `Run this? [y/N]` step, on `y`, launches a real
+`claude`/`codex`/`orca` subprocess exactly like `usher-point run` does.
 
 ## `usher-point route`
 
