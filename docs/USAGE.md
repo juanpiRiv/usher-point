@@ -6,7 +6,12 @@ remain available: `route` (dry-run), `run` (dry-run + actually launch),
 `doctor` (safe, read-only environment check), and `config`
 (`set-key`/`unset-key`/`status` — manage the local Jev/OpenRouter API key).
 All output below is real, captured from this machine after the `jev` →
-`usher-point` rename.
+`usher-point` rename. **Caveat:** several `skills:` lines further below show
+`(score 1, ...)` matches captured before the minimum-score-2 threshold
+described in "Skill matching: minimum score threshold" was introduced —
+they illustrate the field's original shape, not what a fresh run produces
+today (a fresh run would show `(none matched)` for those specific score-1
+cases instead).
 
 ## Interactive mode: `usher` / `usher-point` (no arguments)
 
@@ -14,10 +19,14 @@ Bare invocation — no subcommand, no args — starts an interactive loop
 instead of printing help, the same pattern as `claude` with no args opening
 a chat session. It's read one line at a time via Node's built-in `readline`;
 each non-empty line is routed through the exact same `resolveRoute()`
-resolution and `printPlan()` formatting that `route` uses (no second
-implementation), followed by a `Run this? [y/N]` confirmation that, on
-`y`/`yes`, executes the resolved command through the same `exec/run-command.ts`
-path that `run` uses.
+resolution that `route` uses (no second routing/skill-selection
+implementation) and rendered with `printReplPlan()` — a REPL-only formatter
+that presents the same decision/skills data more conversationally (a
+one-line plain-language summary first, technical details compactly below
+it) than `route`/`run`'s own `printPlan()`, which keeps its original
+field-by-field shape unchanged. This is followed by a `Run this? [y/N]`
+confirmation that, on `y`/`yes`, executes the resolved command through the
+same `exec/run-command.ts` path that `run` uses.
 
 ```
 $ usher
@@ -25,17 +34,22 @@ usher-point v0.1.0 — interactive mode.
 Type a task description, or "exit"/"quit"/Ctrl+D to leave.
 
 usher> fix a typo in README
-task:   "fix a typo in README"
-rule:   quick-inline
-via:    heuristic-fallback (jev-model unavailable)
-target: claude-inline
-skills: migrating-dbt-project-across-platforms (score 1, fallback)
-command: claude -p "fix a typo in README" --allowedTools migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero/dev/usher-point
+This looks like a quick task — I'd run it inline with Claude Code.
+
+  rule:   quick-inline  (via: heuristic-fallback (jev-model unavailable))
+  target: claude-inline
+  skills: (none matched)
+  command: claude -p "fix a typo in README" --add-dir /Users/juanpablorivero/dev/usher-point
 Run this? [y/N] n
+
 usher> exit
 
 Goodbye.
 ```
+
+The REPL uses its own presentation over the exact same routing/skill data `route`/`run` use (a one-line plain-language summary first, then the technical details more compactly below it) — `route`/`run` themselves keep their original field-by-field output unchanged (see below), since scripts/CI may depend on its exact shape.
+
+`skills: (none matched)` above is also correct, not a regression: `skills/select.ts` now requires at least 2 overlapping non-stopword keywords before showing a match at all (previously any single incidental word in common, e.g. "fix", was enough) — see "Skill matching: minimum score threshold" below.
 
 Notes:
 - `exit`, `quit`, empty input at EOF (Ctrl+D), and Ctrl+C all leave cleanly
@@ -71,6 +85,38 @@ this way — the REPL's `Run this? [y/N]` step, on `y`, launches a real
 
 Dry-run only — prints the routing decision, the resolved command, and
 matched skills. Never spawns a process.
+
+### Skill matching: minimum score threshold
+
+`skills/select.ts`'s keyword-overlap scoring is a raw count of non-stopword
+tokens shared between the task text and a candidate skill's `name` +
+`description`, with no length normalization. A match now needs a score of at
+least **2** to be shown at all — below that, no skills are listed
+(`skills: (none matched)`) rather than a single low-confidence guess.
+
+This was picked empirically, not guessed: on this machine's ~43 globally
+installed skills (`~/.agents/skills`, mostly unrelated dbt/data-engineering
+skills), a raw score of 1 was overwhelmingly a coincidental hit on a common
+word rather than real signal — e.g. "fix a typo in README" matched
+`migrating-dbt-project-across-platforms` at score 1 purely because both
+happen to contain the word "fix". The stopword list was also expanded to
+filter out the generic verbs/prepositions responsible for this
+("fix", "write", "help", "across", "files", ...), which alone eliminates
+most of this noise; scores of 2+ reliably correspond to genuine topical
+overlap even after that fix, e.g.:
+
+```
+$ usher-point route "migrate our dbt project from snowflake to databricks" --engine heuristic
+skills: upgrading-dbt-core (score 4, fallback), migrating-dbt-project-across-platforms (score 3, fallback), sql-queries (score 2, fallback)
+
+$ usher-point route "review this SQL query for performance issues in bigquery" --engine heuristic
+skills: sql-queries (score 2, fallback), sql-review (score 2, fallback)
+```
+
+The tradeoff: this also drops the rare case where exactly one highly
+distinctive word is the only overlap (e.g. a single match on "react") —
+accepted deliberately, since the goal is avoiding noise, not maximizing
+recall.
 
 ### Quick, single-file task → `claude-inline`
 
