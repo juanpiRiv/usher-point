@@ -17,11 +17,13 @@ import { buildCodexCommand } from "./adapters/codex-adapter";
 import {
   buildOrcaCommand,
   checkOrcaLiveness,
+  expandHome,
   refreshOrcaReference,
   resolveOrcaBinary,
   resolveOrcaTarget,
   referenceCachePath,
 } from "./adapters/orca-adapter";
+import { fetchOrcaSnapshot, findAgentForWorktree, matchesRepoFilter } from "./adapters/orca-watch";
 import { formatCommand, runCommand, type CommandSpec } from "./exec/run-command";
 
 type EngineFlag = "heuristic" | "jev" | "auto";
@@ -476,6 +478,16 @@ function main(): void {
       await runDoctor();
     });
 
+  program
+    .command("watch")
+    .description(
+      "Read-only: poll orca worktree ps/terminal list --json and show live worktree/agent status until Ctrl+C. Never creates or spawns anything."
+    )
+    .option("--repo <name>", "known repo name (see usher-point.config.json knownRepos) — filter to just that repo's worktree(s)")
+    .action((flags: { repo?: string }) => {
+      runWatch(flags.repo);
+    });
+
   const configCmd = program
     .command("config")
     .description(
@@ -639,6 +651,96 @@ async function runDoctor(): Promise<void> {
   }
 
   process.exitCode = hadFailure ? 1 : 0;
+}
+
+const WATCH_POLL_INTERVAL_MS = 2500;
+
+/**
+ * `usher-point watch [--repo <name>]` — read-only, explicit-only visibility
+ * into what an already-dispatched `orca-worktree` run is doing, since `run`
+ * itself only dispatches `orca worktree create ...` and exits once that
+ * command returns; it never shows what the spawned agent does afterward.
+ * Deliberately a *separate* command, never automatic behavior bolted onto
+ * `run` — nothing in usher-point happens unless explicitly asked for.
+ *
+ * Polls Orca's own read-only introspection commands (`orca worktree ps
+ * --json`, `orca terminal list --json`, both via orca-watch.ts's
+ * fetchOrcaSnapshot(), which itself only ever uses this same
+ * resolveOrcaBinary() — no second binary resolution path) on an interval and
+ * redraws. Never creates, modifies, or spawns a worktree/agent itself.
+ *
+ * On any failure to reach Orca or run those commands, this reports it once,
+ * using the exact same doctor-style `orca status --json did not respond
+ * cleanly: ...` phrasing (via checkOrcaLiveness() inside fetchOrcaSnapshot),
+ * and exits rather than looping forever on an error that will not resolve
+ * itself without user action.
+ */
+function runWatch(repoName: string | undefined): void {
+  const config = loadConfig();
+
+  let worktreeRoot: string | undefined;
+  if (repoName !== undefined) {
+    const known = config.knownRepos[repoName];
+    if (!known) {
+      console.error(
+        `usher-point: unknown repo "${repoName}" — not found in usher-point.config.json's knownRepos.`
+      );
+      process.exitCode = 1;
+      return;
+    }
+    worktreeRoot = expandHome(known.worktreeRoot);
+  }
+
+  const binary = resolveOrcaBinary();
+  let timer: NodeJS.Timeout | undefined;
+
+  const stop = (): void => {
+    if (timer) clearInterval(timer);
+    console.log("\nusher-point watch: stopped.");
+    process.exit(0);
+  };
+  // Same discipline as the REPL's SIGINT handling above: Ctrl+C must exit
+  // cleanly (code 0), not with a signal-terminated exit code.
+  process.on("SIGINT", stop);
+
+  const tick = (): void => {
+    const snapshot = fetchOrcaSnapshot(binary);
+
+    if (process.stdout.isTTY) {
+      process.stdout.write("\x1Bc"); // clear + redraw, like `top`
+    } else {
+      console.log("----");
+    }
+    console.log(`usher-point watch — ${new Date().toLocaleTimeString()} (Ctrl+C to stop)`);
+    if (repoName) console.log(`repo filter: ${repoName}`);
+    console.log("");
+
+    if (!snapshot.ok) {
+      console.log(`[warn] ${snapshot.reason}`);
+      if (timer) clearInterval(timer);
+      process.exitCode = 1;
+      return;
+    }
+
+    const worktrees =
+      repoName !== undefined && worktreeRoot !== undefined
+        ? snapshot.worktrees.filter((w) => matchesRepoFilter(w, repoName, worktreeRoot as string))
+        : snapshot.worktrees;
+
+    if (worktrees.length === 0) {
+      console.log(repoName ? `no worktrees reported for repo "${repoName}"` : "no worktrees reported by orca worktree ps --json");
+    } else {
+      for (const w of worktrees) {
+        const agent = findAgentForWorktree(w, snapshot.terminals);
+        console.log(`- ${w.name}  status=${w.status}  agent=${agent ?? "(none)"}`);
+      }
+    }
+  };
+
+  tick();
+  if (process.exitCode === undefined || process.exitCode === 0) {
+    timer = setInterval(tick, WATCH_POLL_INTERVAL_MS);
+  }
 }
 
 main();

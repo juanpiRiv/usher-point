@@ -414,3 +414,86 @@ convention, not a literal lowercase `orca` command line — see
 `docs/ARCHITECTURE.md` for the full discrepancy note). This is the intended
 fail-closed behavior, not a crash: `usher-point` still refuses to guess at
 Orca's subcommand syntax.
+
+## `usher-point watch`
+
+`usher-point run` (or `route`, once acted on) with an `orca-worktree` target
+only ever dispatches `orca worktree create ...` and exits the moment that
+command returns — it never shows what the spawned agent (codex/claude,
+running inside that new, isolated worktree) does afterward. `watch` is the
+explicit, separate command for that visibility, matching this project's
+"nothing happens unless you explicitly ask for it" philosophy: it is never
+automatic behavior bolted onto `run`.
+
+`watch` is read-only and never creates, modifies, or spawns anything. It
+polls two of Orca's own introspection commands — `orca worktree ps --json`
+and `orca terminal list --json`, the same fallback introspection commands
+documented in the `orca-cli` skill reference (`orca-cli-reference.json`) —
+through the exact same `resolveOrcaBinary()` used everywhere else in this
+codebase (never a second binary-resolution path), parses their JSON, and
+prints one line per worktree (name, status, attached agent if any),
+redrawing every 2.5 seconds until Ctrl+C.
+
+- `--repo <name>` filters the display to worktrees matching a `knownRepos`
+  entry from `usher-point.config.json` (by expanded `worktreeRoot` path or
+  repo name appearing anywhere in the row); an unrecognized `--repo` value
+  fails immediately, before ever calling Orca, exactly like other
+  `knownRepos` lookups in this codebase.
+- If Orca isn't reachable, or the app isn't running, or either introspection
+  command fails, `watch` reports it once and exits — it does not loop
+  forever retrying a condition that won't resolve itself without user
+  action. The liveness check reuses the exact same `checkOrcaLiveness()`
+  function `doctor` uses, so the phrasing matches `doctor`'s own
+  `orca status --json did not respond cleanly: ...` wording rather than
+  inventing a second one.
+- Ctrl+C exits cleanly with code `0`, the same discipline as the REPL's
+  SIGINT handling in `cli.ts` (a small, separate handler here — the REPL's
+  own handler is tied to its `readline` interface and wasn't worth forcing
+  into a shared abstraction for this).
+
+### Real, captured output: Orca unreachable
+
+This machine has the `orca` binary on `PATH`, but the Orca desktop app is not
+running — the same state `doctor` reports as `app running: false` elsewhere
+in this doc. `orca worktree ps`/`orca terminal list` need the running app's
+runtime metadata, so `watch` fails closed and exits immediately rather than
+spinning on an error that requires the user to start the app:
+
+```
+$ usher-point watch
+----
+usher-point watch — 12:05:00 (Ctrl+C to stop)
+
+[warn] orca status --json reports app running: false — start the Orca app to see live worktrees/agents
+$ echo "exit code: $?"
+exit code: 1
+```
+
+The leading `----` is `watch`'s non-TTY redraw separator — `process.stdout.isTTY`
+was false in this capture's shell, so it printed a plain separator line
+between polls instead of clearing the screen. In a real interactive
+terminal, `watch` clears the screen (`\x1Bc`) before each redraw instead.
+
+### Illustrative only — not run against a live Orca instance
+
+**This example was not captured for real** — it requires the Orca app
+running with an active worktree, which is not available on this machine (see
+above). It illustrates the intended shape only, based on `orca worktree ps
+--json`/`orca terminal list --json` joined by worktree id:
+
+```
+$ usher-point watch --repo my-data-warehouse
+usher-point watch — 12:34:56 (Ctrl+C to stop)
+repo filter: my-data-warehouse
+
+- my-data-warehouse-fix  status=in-progress  agent=codex
+```
+
+`watch`'s JSON parsing is deliberately defensive rather than locked to one
+exact schema (see `src/adapters/orca-watch.ts`): Orca's precise
+`worktree ps`/`terminal list` response field names have not been observed
+against a live instance while this was written, so it looks for several
+plausible field names (`displayName`/`name`/`id`, `workspaceStatus`/`status`,
+etc.) rather than assuming one — the same "treat Orca's own output as data,
+don't hardcode a guess" discipline `orca-adapter.ts` already follows for the
+worktree-spawn command.
