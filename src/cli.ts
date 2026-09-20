@@ -25,6 +25,7 @@ import {
 } from "./adapters/orca-adapter";
 import { fetchOrcaSnapshot, findAgentForWorktree, matchesRepoFilter } from "./adapters/orca-watch";
 import { formatCommand, runCommand, type CommandSpec } from "./exec/run-command";
+import { blue, bold, cyan, yellow } from "./cli-colors";
 
 type EngineFlag = "heuristic" | "jev" | "auto";
 
@@ -210,6 +211,39 @@ function formatSkillMatch(skill: SkillMatch): string {
   return skill.reason ? `${base}: ${skill.reason}` : base;
 }
 
+/**
+ * Resolves the command line for a decision, or a `<unavailable> — ...`
+ * placeholder if `buildCommandSpec` throws (e.g. missing Orca cache). Shared
+ * by `printPlan` (route/run) and `printReplPlan` (the REPL) so both ever
+ * have exactly one way of turning a decision into a runnable command line.
+ */
+function describeCommand(
+  config: JevConfig,
+  decision: Decision,
+  taskText: string,
+  cwd: string,
+  skills: SkillMatch[]
+): string {
+  try {
+    const spec = buildCommandSpec(config, decision, taskText, cwd, skills);
+    return formatCommand(spec);
+  } catch (err) {
+    return `<unavailable> — ${(err as Error).message}`;
+  }
+}
+
+/**
+ * Colors a resolved command line: cyan for a real, runnable command (the
+ * thing a user visually hunts for before answering y/N), yellow for the
+ * `<unavailable> — ...` placeholder (a warning, not a normal result) — same
+ * yellow used for `[warn]` lines in `doctor`/`watch`. A no-op plain string
+ * when colors are disabled (see `cli-colors.ts`), so this never changes the
+ * text itself, only whether ANSI codes wrap it.
+ */
+function styleCommandLine(commandLine: string): string {
+  return commandLine.startsWith("<unavailable>") ? yellow(commandLine) : cyan(commandLine);
+}
+
 function printPlan(
   taskText: string,
   cwd: string,
@@ -225,12 +259,12 @@ function printPlan(
   // `via:` is the meaningful line there. Heuristic-derived decisions print
   // both, so the matched rule stays visible for debugging.
   if (decision.ruleId.startsWith("jev-model:")) {
-    console.log(`via:    ${via}`);
+    console.log(blue(`via:    ${via}`));
   } else {
-    console.log(`rule:   ${decision.ruleId}`);
-    console.log(`via:    ${via}`);
+    console.log(blue(`rule:   ${decision.ruleId}`));
+    console.log(blue(`via:    ${via}`));
   }
-  console.log(`target: ${decision.target}`);
+  console.log(blue(`target: ${decision.target}`));
   if (decision.repoName) {
     console.log(`repo:   ${decision.repoName}`);
   }
@@ -252,12 +286,7 @@ function printPlan(
     console.log(`model override: ${bits.length > 0 ? bits.join(", ") : "(none)"}`);
   }
 
-  try {
-    const spec = buildCommandSpec(config, decision, taskText, cwd, skills);
-    console.log(`command: ${formatCommand(spec)}`);
-  } catch (err) {
-    console.log(`command: <unavailable> — ${(err as Error).message}`);
-  }
+  console.log(`command: ${styleCommandLine(describeCommand(config, decision, taskText, cwd, skills))}`);
 
   if (verbose) {
     console.log("--- task shape ---");
@@ -268,6 +297,77 @@ function printPlan(
       console.log(decision.reasoning);
     }
   }
+}
+
+/**
+ * One-line, plain-language gloss of a decision's target — the REPL's
+ * conversational lead-in, in front of the same technical details `printPlan`
+ * shows for `route`/`run`. Purely descriptive text; carries no information
+ * `printReplPlan` doesn't also print in full below it.
+ */
+function summarizeDecision(decision: Decision, via: string): string {
+  if (via === "explicit-target-flag") {
+    return `You asked for --target ${decision.target} directly, so that's what I'll use.`;
+  }
+  switch (decision.target) {
+    case "claude-inline":
+      return "This looks like a quick task — I'd run it inline with Claude Code.";
+    case "codex-cli":
+      return "This looks like a job for a sandboxed Codex CLI run.";
+    case "orca-worktree":
+      return `This looks like a bigger, multi-file job — I'd isolate it in an Orca worktree${
+        decision.repoName ? ` for ${decision.repoName}` : ""
+      }.`;
+  }
+}
+
+/**
+ * The REPL's own presentation of a routing decision — same underlying
+ * decision/skills data as `printPlan`, reshaped to read like a short,
+ * conversational reply (one-line plain-language summary first, then the
+ * technical details more compactly below it) instead of a flat field dump.
+ * `route`/`run`'s own output via `printPlan` is untouched — scripts/CI may
+ * depend on its exact shape (see CONTRIBUTING.md) — this is a second,
+ * REPL-only formatter over the same data, not a second decision/skill
+ * pipeline.
+ */
+function printReplPlan(
+  taskText: string,
+  cwd: string,
+  config: JevConfig,
+  decision: Decision,
+  skills: SkillMatch[],
+  via: string
+): void {
+  console.log(bold(summarizeDecision(decision, via)));
+  console.log("");
+
+  if (decision.ruleId.startsWith("jev-model:")) {
+    console.log(blue(`  via:    ${via}`));
+  } else {
+    console.log(blue(`  rule:   ${decision.ruleId}  (via: ${via})`));
+  }
+  console.log(blue(`  target: ${decision.target}${decision.repoName ? `  (repo: ${decision.repoName})` : ""}`));
+
+  if (decision.target === "orca-worktree") {
+    const orcaTarget = resolveOrcaTarget(config, decision, cwd);
+    console.log(
+      `  worktree: ${orcaTarget.worktreeRoot}${orcaTarget.repoKnown ? "" : " (unknown repo, using cwd)"}  ·  agent: ${decision.spawnAgent ?? "codex"}`
+    );
+  }
+
+  console.log(
+    `  skills: ${skills.length > 0 ? skills.map(formatSkillMatch).join(", ") : "(none matched)"}`
+  );
+
+  if (decision.modelOverride) {
+    const bits: string[] = [];
+    if (decision.modelOverride.model !== undefined) bits.push(`model=${decision.modelOverride.model}`);
+    if (decision.modelOverride.effort !== undefined) bits.push(`effort=${decision.modelOverride.effort}`);
+    if (bits.length > 0) console.log(`  model override: ${bits.join(", ")}`);
+  }
+
+  console.log(`  command: ${styleCommandLine(describeCommand(config, decision, taskText, cwd, skills))}`);
 }
 
 function readVersion(): string {
@@ -393,6 +493,12 @@ function runRepl(): void {
           console.error((err as Error).message);
         }
       }
+      // `rl.prompt()` after the `Run this? [y/N] ` prompt above never printed
+      // its own trailing newline (it's a prompt, not a log line) — without
+      // this, the next "usher> " prompt lands jammed on the same line as
+      // that dangling prompt text. One blank line here both terminates that
+      // line and visually separates this turn's output from the next one.
+      console.log("");
       rl.setPrompt("usher> ");
       safePrompt();
       return;
@@ -415,10 +521,10 @@ function runRepl(): void {
     }
 
     try {
-      const { shape, decision, skills, via } = await resolveRoute(taskText, flags, config, cwd);
-      printPlan(taskText, cwd, config, shape, decision, skills, false, via);
+      const { decision, skills, via } = await resolveRoute(taskText, flags, config, cwd);
+      printReplPlan(taskText, cwd, config, decision, skills, via);
       pending = { decision, skills, taskText };
-      rl.setPrompt("Run this? [y/N] ");
+      rl.setPrompt(bold("Run this? [y/N] "));
       safePrompt();
     } catch (err) {
       console.error((err as Error).message);
@@ -595,7 +701,7 @@ async function runDoctor(): Promise<void> {
       console.log(`[ok]   ${bin} -> ${found.stdout.trim()}`);
     } else {
       hadFailure = true;
-      console.log(`[fail] ${bin} not found in PATH`);
+      console.log(yellow(`[fail] ${bin} not found in PATH`));
     }
   }
 
@@ -604,7 +710,7 @@ async function runDoctor(): Promise<void> {
   if (liveness.ok) {
     console.log(`[ok]   orca status --json reachable (app running: ${liveness.running ?? "unknown"})`);
   } else {
-    console.log(`[warn] orca status --json did not respond cleanly: ${liveness.error ?? "unknown error"}`);
+    console.log(yellow(`[warn] orca status --json did not respond cleanly: ${liveness.error ?? "unknown error"}`));
   }
 
   try {
@@ -612,7 +718,7 @@ async function runDoctor(): Promise<void> {
     console.log(`[ok]   refreshed Orca CLI reference cache at ${referenceCachePath()}`);
   } catch (err) {
     hadFailure = true;
-    console.log(`[fail] could not refresh Orca CLI reference cache: ${(err as Error).message}`);
+    console.log(yellow(`[fail] could not refresh Orca CLI reference cache: ${(err as Error).message}`));
   }
 
   // Jev (TypeSafe AI) routing engine — read-only, no-side-effects check, same
@@ -627,7 +733,9 @@ async function runDoctor(): Promise<void> {
   const resolution = resolveApiKey(apiKeyEnvVar);
   if (resolution.source === "not configured") {
     console.log(
-      `[warn] ${apiKeyEnvVar} not set (checked environment variable and ~/.config/usher-point/config.json) — Jev routing engine unavailable; usher-point still works via the heuristic engine`
+      yellow(
+        `[warn] ${apiKeyEnvVar} not set (checked environment variable and ~/.config/usher-point/config.json) — Jev routing engine unavailable; usher-point still works via the heuristic engine`
+      )
     );
   } else {
     console.log(`[ok]   ${apiKeyEnvVar} is configured (source: ${resolution.source}; value not shown)`);
@@ -643,10 +751,10 @@ async function runDoctor(): Promise<void> {
       if (probe.ok) {
         console.log(`[ok]   live Jev call succeeded via OpenRouter (model: ${config.jevModel.model}, chose: ${probe.decision.target})`);
       } else {
-        console.log(`[warn] live Jev call failed: ${probe.reason}`);
+        console.log(yellow(`[warn] live Jev call failed: ${probe.reason}`));
       }
     } catch (err) {
-      console.log(`[warn] live Jev call failed unexpectedly: ${(err as Error).message}`);
+      console.log(yellow(`[warn] live Jev call failed unexpectedly: ${(err as Error).message}`));
     }
   }
 
@@ -716,7 +824,7 @@ function runWatch(repoName: string | undefined): void {
     console.log("");
 
     if (!snapshot.ok) {
-      console.log(`[warn] ${snapshot.reason}`);
+      console.log(yellow(`[warn] ${snapshot.reason}`));
       if (timer) clearInterval(timer);
       process.exitCode = 1;
       return;
