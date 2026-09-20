@@ -93,15 +93,28 @@ again.
 ## Optional: routing via TypeSafe AI's "Jev" model
 
 By default, `usher-point` decides where to route a task with the local,
-hand-written heuristic in `src/routing/classify.ts` + `decide.ts` — plain
-keyword/flag checks, no network calls, no ML. Optionally, it can instead ask
-**TypeSafe AI's "Jev"** model — a real third-party "System One Model"
-purpose-built for fast structured/typed decisions (routing, classification),
-not general chat — to make the call. `usher-point` reaches it only through
-**OpenRouter's** standard chat-completions API
-(`https://openrouter.ai/api/v1/chat/completions`), using your own OpenRouter
-API key. `usher-point` never talks to `docs.typesafe.ai`/`console.typesafe.ai`
-directly and never stores or prints your API key.
+hand-written heuristic in `src/routing/classify.ts` + `decide.ts`, and which
+skills are relevant with `src/skills/select.ts`'s keyword-overlap ranking —
+plain keyword/flag checks, no network calls, no ML. Optionally, it can
+instead ask **TypeSafe AI's "Jev"** model — a real third-party "System One
+Model" purpose-built for fast structured/typed decisions (routing,
+classification), not general chat — to make **one unified decision** covering
+target, skills, *and* an optional model/effort override, in a single call.
+`usher-point` reaches it only through **OpenRouter's** standard
+chat-completions API (`https://openrouter.ai/api/v1/chat/completions`), using
+your own OpenRouter API key. `usher-point` never talks to
+`docs.typesafe.ai`/`console.typesafe.ai` directly and never stores or prints
+your API key.
+
+This unification only applies when the Jev engine actually decides: Jev is
+shown the same candidate skill list the heuristic path would rank (gathered
+by `skills/select.ts`'s `gatherSkillCandidates()`, capped for prompt size by
+`capCandidates()` if unusually large) and returns which of them it judges
+relevant, replacing the keyword-overlap step for that call. Any Jev failure —
+disabled, no key, network error, malformed reply — falls back to the
+heuristic **and** `skills/select.ts` together, never a mixed decision. See
+`docs/ARCHITECTURE.md` for the full flow and `docs/USAGE.md` for illustrative
+(untested — no API key on this machine) example output.
 
 To enable it:
 

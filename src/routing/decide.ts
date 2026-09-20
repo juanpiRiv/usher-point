@@ -6,6 +6,12 @@ import type { Decision, RouteTarget, TaskShape } from "./types";
  * An explicit --target flag always wins outright, before any rule is even
  * consulted. If nothing matches, fall back to the safest/cheapest target
  * (claude-inline) rather than guessing.
+ *
+ * Decision.skills is always [] here — decide.ts never selects skills itself.
+ * On this (heuristic) path cli.ts#resolveRoute separately calls
+ * skills/select.ts's keyword-overlap ranking to produce the resolved skill
+ * list; only routing/jev-model.ts's decideViaJevModel() populates
+ * Decision.skills directly.
  */
 
 const CONFIG_TARGET_TO_ROUTE_TARGET: Record<Rule["target"], RouteTarget> = {
@@ -23,6 +29,7 @@ export function decide(shape: TaskShape, config: JevConfig): Decision {
     const decision: Decision = {
       target: shape.explicitTarget,
       ruleId: EXPLICIT_TARGET_RULE_ID,
+      skills: [],
     };
     if (shape.repoName !== undefined) decision.repoName = shape.repoName;
     return decision;
@@ -34,6 +41,7 @@ export function decide(shape: TaskShape, config: JevConfig): Decision {
     const decision: Decision = {
       target: CONFIG_TARGET_TO_ROUTE_TARGET[rule.target],
       ruleId: rule.id,
+      skills: [],
     };
     if (rule.sandbox !== undefined) decision.sandbox = rule.sandbox;
     if (rule.spawnAgent !== undefined) decision.spawnAgent = rule.spawnAgent;
@@ -41,7 +49,7 @@ export function decide(shape: TaskShape, config: JevConfig): Decision {
     return decision;
   }
 
-  const fallback: Decision = { target: FALLBACK_TARGET, ruleId: FALLBACK_RULE_ID };
+  const fallback: Decision = { target: FALLBACK_TARGET, ruleId: FALLBACK_RULE_ID, skills: [] };
   if (shape.repoName !== undefined) fallback.repoName = shape.repoName;
   return fallback;
 }

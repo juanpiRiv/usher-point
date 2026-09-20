@@ -4,12 +4,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { loadConfig } from "./config/load";
-import type { JevConfig } from "./config/schema";
+import type { JevConfig, TargetConfig } from "./config/schema";
 import { classify } from "./routing/classify";
 import { decide } from "./routing/decide";
 import { checkJevAvailability, decideViaJevModel, probeJevModel } from "./routing/jev-model";
 import type { Decision, TaskShape } from "./routing/types";
-import { selectSkills } from "./skills/select";
+import { capCandidates, decisionSkillsToMatches, gatherSkillCandidates, selectSkills } from "./skills/select";
 import type { SkillMatch } from "./skills/select";
 import { buildClaudeCommand } from "./adapters/claude-adapter";
 import { buildCodexCommand } from "./adapters/codex-adapter";
@@ -50,17 +50,30 @@ function resolveEngineFlag(engine: string | undefined): EngineFlag {
 
 /**
  * Resolves the routing decision, choosing between the local heuristic
- * (classify.ts + decide.ts) and the optional Jev model (routing/jev-model.ts)
- * per `--engine`:
- *   - heuristic: always use the local rules, never call out to Jev.
+ * (classify.ts + decide.ts + skills/select.ts) and the optional Jev model
+ * (routing/jev-model.ts) per `--engine`:
+ *   - heuristic: always use the local rules and skills/select.ts's
+ *     keyword-overlap ranking, never call out to Jev.
  *   - jev: always call Jev; fail LOUDLY (throw) if it's unavailable rather
  *     than silently substituting the heuristic — the caller explicitly asked
  *     for Jev.
  *   - auto (default): try Jev first; on ANY failure (disabled, no key,
- *     network error, bad reply) fall back to the heuristic, and always
- *     report which engine actually decided via `via`.
+ *     network error, bad reply) fall back to the heuristic (routing AND
+ *     skill selection together — never a mixed state), and always report
+ *     which engine actually decided via `via`.
  * An explicit --target flag always wins outright, before any engine runs,
- * exactly as it did before this feature existed.
+ * exactly as it did before this feature existed, and always uses
+ * skills/select.ts for its skill list (there's no routing decision to hand
+ * to Jev in that case).
+ *
+ * When Jev is actually consulted (engine "jev" or "auto"), the candidate
+ * skill list is gathered once up front via skills/select.ts's
+ * gatherSkillCandidates()/capCandidates() — the raw {name, path, description}
+ * list, with no keyword-overlap ranking applied — and handed to Jev as
+ * context so it can decide skills in the same call as target/model. If Jev
+ * succeeds, its Decision.skills is mapped back to display-ready SkillMatch
+ * objects via decisionSkillsToMatches() using that same candidate list,
+ * instead of calling selectSkills() at all for that invocation.
  */
 async function resolveRoute(
   taskText: string,
@@ -74,17 +87,22 @@ async function resolveRoute(
   if (flags.worktree !== undefined) classifyFlags.worktree = flags.worktree;
 
   const shape = classify(taskText, classifyFlags, config);
-  const skills = selectSkills(taskText, cwd);
 
   if (shape.explicitTarget !== undefined) {
+    const skills = selectSkills(taskText, cwd);
     return { shape, decision: decide(shape, config), skills, via: "explicit-target-flag" };
   }
 
   const engine = resolveEngineFlag(flags.engine);
 
   if (engine === "heuristic") {
+    const skills = selectSkills(taskText, cwd);
     return { shape, decision: decide(shape, config), skills, via: "heuristic (forced)" };
   }
+
+  // engine is "jev" or "auto": both may call Jev, so gather the raw candidate
+  // skill list once (no ranking) to hand it context.
+  const candidates = capCandidates(gatherSkillCandidates(cwd), taskText);
 
   if (engine === "jev") {
     const availability = checkJevAvailability(config.jevModel);
@@ -93,26 +111,51 @@ async function resolveRoute(
         `usher-point: --engine jev was forced but the Jev model is unavailable (${availability.reason}). Refusing to silently fall back to the heuristic — retry with --engine auto or --engine heuristic.`
       );
     }
-    const jevDecision = await decideViaJevModel(taskText, config.jevModel, config.targets);
+    const jevDecision = await decideViaJevModel(taskText, config.jevModel, config.targets, candidates);
     if (!jevDecision) {
       throw new Error(
         "usher-point: --engine jev was forced but the Jev model call failed (network error, non-2xx, or an unparseable reply). Refusing to silently fall back to the heuristic — retry with --engine auto or --engine heuristic."
       );
     }
-    return { shape, decision: jevDecision, skills, via: `jev-model (${config.jevModel.model})` };
+    return {
+      shape,
+      decision: jevDecision,
+      skills: decisionSkillsToMatches(jevDecision.skills, candidates),
+      via: `jev-model (${config.jevModel.model})`,
+    };
   }
 
   // engine === "auto"
-  const jevDecision = await decideViaJevModel(taskText, config.jevModel, config.targets);
+  const jevDecision = await decideViaJevModel(taskText, config.jevModel, config.targets, candidates);
   if (jevDecision) {
-    return { shape, decision: jevDecision, skills, via: `jev-model (${config.jevModel.model})` };
+    return {
+      shape,
+      decision: jevDecision,
+      skills: decisionSkillsToMatches(jevDecision.skills, candidates),
+      via: `jev-model (${config.jevModel.model})`,
+    };
   }
   return {
     shape,
     decision: decide(shape, config),
-    skills,
+    skills: selectSkills(taskText, cwd),
     via: "heuristic-fallback (jev-model unavailable)",
   };
+}
+
+/**
+ * Applies a Jev-supplied modelOverride (if any) on top of a target's
+ * configured defaults. Deliberately generic across targets — it only ever
+ * touches the generic TargetConfig.defaultModel/defaultEffort fields, never
+ * anything codex-specific; codex-adapter.ts just happens to be the only
+ * adapter that currently reads those fields back out.
+ */
+function applyModelOverride(target: TargetConfig, override: Decision["modelOverride"]): TargetConfig {
+  if (!override) return target;
+  const merged: TargetConfig = { ...target };
+  if (override.model !== undefined) merged.defaultModel = override.model;
+  if (override.effort !== undefined) merged.defaultEffort = override.effort;
+  return merged;
 }
 
 function buildCommandSpec(
@@ -124,14 +167,44 @@ function buildCommandSpec(
 ): CommandSpec {
   switch (decision.target) {
     case "claude-inline":
-      return buildClaudeCommand(config.targets.claudeInline, taskText, cwd, skills);
+      return buildClaudeCommand(
+        applyModelOverride(config.targets.claudeInline, decision.modelOverride),
+        taskText,
+        cwd,
+        skills
+      );
     case "codex-cli":
-      return buildCodexCommand(config.targets.codexCli, taskText, cwd, decision.sandbox);
+      return buildCodexCommand(
+        applyModelOverride(config.targets.codexCli, decision.modelOverride),
+        taskText,
+        cwd,
+        decision.sandbox
+      );
     case "orca-worktree": {
       const orcaTarget = resolveOrcaTarget(config, decision, cwd);
-      return buildOrcaCommand(config.targets.orcaWorktree, decision, taskText, orcaTarget);
+      return buildOrcaCommand(
+        applyModelOverride(config.targets.orcaWorktree, decision.modelOverride),
+        decision,
+        taskText,
+        orcaTarget
+      );
     }
   }
+}
+
+/**
+ * Single shared formatter for one skill match line, used by printPlan()
+ * below — the one place `route`/`run` output and the REPL's decision
+ * printer both go through, so heuristic-sourced (scored) and Jev-sourced
+ * (unscored, possibly with a reason) skills render consistently without a
+ * second formatting implementation.
+ */
+function formatSkillMatch(skill: SkillMatch): string {
+  const details: string[] = [];
+  if (typeof skill.score === "number") details.push(`score ${skill.score}`);
+  details.push(skill.source);
+  const base = `${skill.name} (${details.join(", ")})`;
+  return skill.reason ? `${base}: ${skill.reason}` : base;
 }
 
 function printPlan(
@@ -166,8 +239,15 @@ function printPlan(
   }
 
   console.log(
-    `skills: ${skills.length > 0 ? skills.map((s) => `${s.name} (score ${s.score}, ${s.source})`).join(", ") : "(none matched)"}`
+    `skills: ${skills.length > 0 ? skills.map(formatSkillMatch).join(", ") : "(none matched)"}`
   );
+
+  if (decision.modelOverride) {
+    const bits: string[] = [];
+    if (decision.modelOverride.model !== undefined) bits.push(`model=${decision.modelOverride.model}`);
+    if (decision.modelOverride.effort !== undefined) bits.push(`effort=${decision.modelOverride.effort}`);
+    console.log(`model override: ${bits.length > 0 ? bits.join(", ") : "(none)"}`);
+  }
 
   try {
     const spec = buildCommandSpec(config, decision, taskText, cwd, skills);

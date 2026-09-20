@@ -13,21 +13,55 @@ import type { Decision, RouteTarget } from "./types";
  * process; it makes one HTTP call to *decide*, then hands the result off to
  * the exact same adapters the heuristic path uses.
  *
+ * Unified decision: when Jev is the active engine, ONE call to Jev decides
+ * everything usher-point needs — not just `target`, but also which of the
+ * candidate skills are relevant (replacing skills/select.ts's keyword-overlap
+ * ranking for that call) and, optionally, a model/effort override for the
+ * resolved target. The candidate skill list itself is still gathered by
+ * skills/ code (registry-reader.ts / fallback-scan.ts, via cli.ts) — this
+ * module only receives the already-gathered candidates as plain data and
+ * never imports from skills/, keeping the routing/skills module boundary
+ * intact. The heuristic engine (classify.ts + decide.ts + skills/select.ts)
+ * is completely unaffected by this — it's a separate call path.
+ *
  * Fail-closed philosophy (same as the Orca adapter's cache-miss handling):
  * any problem at all — Jev disabled, no API key, network error, non-2xx,
  * malformed/unparseable response — returns null so the caller can fall back
- * to the local heuristic. This module NEVER throws and NEVER crashes the CLI.
+ * to the local heuristic (both routing AND skill selection revert together;
+ * there is no partial/mixed state). This module NEVER throws and NEVER
+ * crashes the CLI.
  */
 
 const OPENROUTER_CHAT_COMPLETIONS_URL = "https://openrouter.ai/api/v1/chat/completions";
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_RESPONSE_TOKENS = 600;
 
 const VALID_TARGETS: readonly RouteTarget[] = ["claude-inline", "codex-cli", "orca-worktree"];
+
+/**
+ * Minimal, skills-module-agnostic shape for a candidate skill Jev is told
+ * about. cli.ts maps skills/select.ts's SkillCandidate into this shape
+ * before calling decideViaJevModel — this module never imports from skills/.
+ */
+export interface JevSkillCandidate {
+  name: string;
+  path: string;
+  description: string;
+}
 
 const JevModelResponseSchema = z.object({
   target: z.enum(["claude-inline", "codex-cli", "orca-worktree"]),
   confidence: z.number().min(0).max(1),
   reasoning: z.string().min(1),
+  /** Subset of the candidate skills' `name`/`path` Jev judges relevant. */
+  skills: z.array(z.string()).default([]),
+  /** Omit entirely, or omit its inner fields, when no override is warranted. */
+  modelOverride: z
+    .object({
+      model: z.string().min(1).optional(),
+      effort: z.string().min(1).optional(),
+    })
+    .optional(),
 });
 
 export type JevAvailability = { available: true } | { available: false; reason: string };
@@ -59,21 +93,72 @@ function describeTargets(targets: JevConfig["targets"]): TargetDescription[] {
   ];
 }
 
-function buildPrompt(taskText: string, targets: JevConfig["targets"]): string {
+function describeSkillCandidates(candidates: readonly JevSkillCandidate[]): string {
+  if (candidates.length === 0) return "(no candidate skills available)";
+  return candidates
+    .map((c) => `- "${c.name}" (${c.path}): ${c.description || "(no description)"}`)
+    .join("\n");
+}
+
+function buildPrompt(
+  taskText: string,
+  targets: JevConfig["targets"],
+  skillCandidates: readonly JevSkillCandidate[]
+): string {
   const options = describeTargets(targets)
     .map((t) => `- "${t.target}": ${t.description}`)
     .join("\n");
+  const skillsList = describeSkillCandidates(skillCandidates);
 
   return [
-    "You are a routing engine for the usher-point CLI. Given a task description,",
-    "choose exactly one of the following targets:",
+    "You are a unified decision engine for the usher-point CLI. Given a task",
+    "description, decide ALL of the following in one response:",
+    "",
+    "1. Which target should run the task — choose exactly one of:",
     options,
+    "",
+    "2. Which of these candidate skills (if any) are relevant to the task.",
+    "Return each relevant skill by its exact name or path as given below —",
+    "never invent a skill that isn't listed:",
+    skillsList,
+    "",
+    "3. Optionally, a model/effort override for the chosen target, only if the",
+    "task clearly needs a different underlying model or reasoning effort than",
+    "that target's configured default. Omit modelOverride entirely (or its",
+    "model/effort fields) when no override is warranted — this is the common",
+    "case.",
     "",
     `Task: ${JSON.stringify(taskText)}`,
     "",
-    "Respond with ONLY a single JSON object, no prose, no markdown fences, matching",
-    'exactly this shape: {"target": "<one of the target names above>", "confidence": <number 0-1>, "reasoning": "<one sentence>"}.',
+    "Respond with ONLY a single JSON object, no prose, no markdown fences,",
+    "matching exactly this shape:",
+    '{"target": "<one of the target names above>", "confidence": <number 0-1>, "reasoning": "<one sentence>", "skills": ["<candidate name or path>", ...], "modelOverride": {"model": "<optional>", "effort": "<optional>"}}',
+    '"skills" may be an empty array. Omit "modelOverride" (or leave it out) when unused.',
   ].join("\n");
+}
+
+/**
+ * Maps Jev's returned skill name/path strings back to the exact candidates
+ * it was shown, dropping anything that doesn't match a known candidate
+ * (fail-closed against a hallucinated/unknown skill reference) and
+ * de-duplicating by path.
+ */
+function matchSkills(
+  returned: readonly string[],
+  candidates: readonly JevSkillCandidate[]
+): { path: string; reason?: string }[] {
+  const byName = new Map(candidates.map((c) => [c.name, c] as const));
+  const byPath = new Map(candidates.map((c) => [c.path, c] as const));
+  const seen = new Set<string>();
+  const matched: { path: string; reason?: string }[] = [];
+
+  for (const entry of returned) {
+    const candidate = byName.get(entry) ?? byPath.get(entry);
+    if (!candidate || seen.has(candidate.path)) continue;
+    seen.add(candidate.path);
+    matched.push({ path: candidate.path });
+  }
+  return matched;
 }
 
 /** Extracts the first top-level JSON object found in free-form model output. */
@@ -97,7 +182,12 @@ function extractJson(content: string): unknown {
  * callers want; `probeJevModel` (used by `usher-point doctor`) exposes the
  * failure reason for diagnostics.
  */
-export async function probeJevModel(taskText: string, cfg: JevModelConfig, targets: JevConfig["targets"]): Promise<JevCallResult> {
+export async function probeJevModel(
+  taskText: string,
+  cfg: JevModelConfig,
+  targets: JevConfig["targets"],
+  skillCandidates: readonly JevSkillCandidate[] = []
+): Promise<JevCallResult> {
   const availability = checkJevAvailability(cfg);
   if (!availability.available) {
     return { ok: false, reason: availability.reason };
@@ -118,8 +208,8 @@ export async function probeJevModel(taskText: string, cfg: JevModelConfig, targe
       body: JSON.stringify({
         model: cfg.model,
         temperature: 0,
-        max_tokens: 200,
-        messages: [{ role: "user", content: buildPrompt(taskText, targets) }],
+        max_tokens: MAX_RESPONSE_TOKENS,
+        messages: [{ role: "user", content: buildPrompt(taskText, targets, skillCandidates) }],
       }),
       signal: controller.signal,
     });
@@ -172,7 +262,14 @@ export async function probeJevModel(taskText: string, cfg: JevModelConfig, targe
     ruleId: `jev-model:${cfg.model}`,
     confidence: parsed.data.confidence,
     reasoning: parsed.data.reasoning,
+    skills: matchSkills(parsed.data.skills, skillCandidates),
   };
+  const override = parsed.data.modelOverride;
+  if (override && (override.model !== undefined || override.effort !== undefined)) {
+    decision.modelOverride = {};
+    if (override.model !== undefined) decision.modelOverride.model = override.model;
+    if (override.effort !== undefined) decision.modelOverride.effort = override.effort;
+  }
   return { ok: true, decision };
 }
 
@@ -188,13 +285,21 @@ function extractMessageContent(payload: unknown): string | undefined {
 /**
  * Fail-closed-to-null decision source: use this from cli.ts/decide.ts. Any
  * failure at all (disabled, no key, network error, bad status, unparseable
- * reply) yields null so the caller can fall back to the local heuristic.
+ * reply) yields null so the caller can fall back to the local heuristic —
+ * including its skill selection (cli.ts must call skills/select.ts on that
+ * path; it must not use a partial Jev decision).
+ *
+ * `skillCandidates` should be the raw, unranked candidate list gathered by
+ * skills/ code (see skills/select.ts's gatherSkillCandidates/capCandidates)
+ * — pass [] to skip skill selection for this call (e.g. `usher-point doctor`'s
+ * trivial connectivity probe).
  */
 export async function decideViaJevModel(
   taskText: string,
   cfg: JevModelConfig,
-  targets: JevConfig["targets"]
+  targets: JevConfig["targets"],
+  skillCandidates: readonly JevSkillCandidate[] = []
 ): Promise<Decision | null> {
-  const result = await probeJevModel(taskText, cfg, targets);
+  const result = await probeJevModel(taskText, cfg, targets, skillCandidates);
   return result.ok ? result.decision : null;
 }

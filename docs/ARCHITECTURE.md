@@ -25,11 +25,14 @@ back to the heuristic on any failure.
 flowchart TD
     A["user task string\n(usher-point route/run \"...\" [flags, --engine])"] --> B["classify.ts\nbuilds TaskShape\n(isMultiFile, isMultiRepo,\nneedsIsolation, explicitTarget, repoName)"]
     B --> Z{"explicitTarget set?"}
-    Z -->|yes| C
-    Z -->|no, engine=jev or auto| J["jev-model.ts\nHTTP POST to OpenRouter\n(typesafe/jev-*, via OPENROUTER_API_KEY)"]
-    Z -->|no, engine=heuristic| C
-    J -->|decision parsed OK| C
-    J -->|disabled / no key / network error /\nbad status / unparseable reply → null| C["decide.ts\nwalks usher-point.config.json rules,\nfirst match wins\n(explicit --target always wins outright)"]
+    Z -->|yes| K["skills/select.ts\nkeyword-overlap ranking"]
+    K --> C
+    Z -->|no, engine=heuristic| K
+    Z -->|no, engine=jev or auto| CAND["skills/select.ts\ngatherSkillCandidates() + capCandidates()\n(raw candidates, NO ranking)"]
+    CAND --> J["jev-model.ts\nONE HTTP POST to OpenRouter\n(typesafe/jev-*, via OPENROUTER_API_KEY)\ncandidate skills passed in as context"]
+    J -->|"unified reply parsed OK:\n{ target, confidence, reasoning,\n  skills[], modelOverride? }"| C
+    J -->|disabled / no key / network error /\nbad status / unparseable reply → null| K
+    C["decide.ts\nwalks usher-point.config.json rules,\nfirst match wins\n(explicit --target always wins outright)"]
     C -->|target: claude-inline| D["claude-adapter.ts"]
     C -->|target: codex-cli| E["codex-adapter.ts"]
     C -->|target: orca-worktree| F["orca-adapter.ts"]
@@ -41,18 +44,40 @@ flowchart TD
     G --> H3["orca <resolved subcommand> ..."]
 ```
 
-Note: when Jev succeeds, its `Decision` is used directly and `decide.ts`'s
-rule-walk is skipped for that invocation (the diagram merges both paths into
-the same downstream box for space; see `src/cli.ts#resolveRoute` for the
-exact branching). `cli.ts` prints which engine actually decided as `via:` in
-`route`/`run` output either way.
+Note: when Jev succeeds, its `Decision` (target + skills + optional
+modelOverride, all from the one call) is used directly, `decide.ts`'s
+rule-walk is skipped for that invocation, and `skills/select.ts`'s
+keyword-overlap ranking (the `K` box above) is skipped too — Jev's `skills[]`
+is used as-is instead (see `src/cli.ts#resolveRoute` for the exact
+branching). On any Jev failure, both routing AND skill selection fall back to
+the heuristic together (`K` + `C`) — never a mixed state. `cli.ts` prints
+which engine actually decided as `via:` in `route`/`run` output either way,
+plus a `model override:` line whenever `decision.modelOverride` is set.
 
-`skills/select.ts` runs alongside this (not shown above for clarity): it
-independently ranks candidate `SKILL.md` paths against the task text, from
-`<cwd>/.atl/skill-registry.md` when present or a fallback scan of
-`~/.agents/skills/*/SKILL.md` otherwise, and its output (a list of skill
-names/paths) is passed into `claude-adapter.ts` to populate `--allowedTools`.
-It never injects skill file contents.
+**Unified Jev decision (current design, since this change):** when the Jev
+engine is active, `jev-model.ts`'s `decideViaJevModel()` no longer only picks
+a `target` — it makes one OpenRouter call that returns target, confidence,
+reasoning, a `skills` subset of the candidate list it was shown, and an
+optional `modelOverride` (`{ model?, effort? }`) for the resolved target's
+configured default. The candidate skill list itself is still gathered by
+`skills/select.ts`'s `gatherSkillCandidates()` (reading the same
+`.atl/skill-registry.md` or `~/.agents/skills/*/SKILL.md` sources as the
+heuristic path) and capped by `capCandidates()` before being embedded in the
+prompt — `jev-model.ts` never imports from `skills/` itself, it only receives
+already-gathered `{name, path, description}` data as a parameter, keeping the
+routing/skills module boundary intact. `decisionSkillsToMatches()` then maps
+Jev's returned skill names/paths back to the same candidate list for display.
+This unification applies **only** to the Jev-engine path: the heuristic
+engine (`classify.ts` + `decide.ts` + `skills/select.ts`'s keyword-overlap
+scoring) is completely unchanged and remains the fallback whenever Jev is
+disabled, unavailable, or fails for any reason.
+
+`decision.modelOverride`, when set, is applied generically in
+`cli.ts#buildCommandSpec` on top of whichever target's `TargetConfig` was
+resolved (overriding `defaultModel`/`defaultEffort`) before handing it to
+that target's adapter — it is not hardcoded to `codexCli`, even though
+`codex-adapter.ts` is currently the only adapter that reads those two fields
+back out.
 
 ## The Orca-worktree path (most fragile boundary)
 

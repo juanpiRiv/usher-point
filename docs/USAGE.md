@@ -146,7 +146,14 @@ command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,
 
 **This example was not run against the real Jev model** — there is no
 OpenRouter API key configured on this machine, so this output is illustrative
-of the intended shape only, not a captured run:
+of the intended shape only, not a captured run. Since this change, the Jev
+call is a **unified decision**: one OpenRouter call returns `target` *and*
+`skills` *and* an optional `modelOverride`, replacing `skills/select.ts`'s
+keyword-overlap ranking for that call (`skills/select.ts` still gathers the
+raw candidate list Jev is shown — it just doesn't rank it on this path). The
+`skills:` line below has no `score` because Jev doesn't produce a numeric
+score, only a relevance judgment; a `model override:` line only appears when
+Jev actually returned one:
 
 ```
 $ export OPENROUTER_API_KEY=sk-...             # real key, not shown here
@@ -154,9 +161,29 @@ $ usher-point route "fix a typo in README" --engine jev
 task:   "fix a typo in README"
 via:    jev-model (typesafe/jev-1.13)
 target: claude-inline
-skills: gh-fix-ci (score 1, registry), judgment-day (score 1, registry), migrating-dbt-project-across-platforms (score 1, registry)
-command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,judgment-day,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
+skills: gh-fix-ci (jev-model), migrating-dbt-project-across-platforms (jev-model)
+command: claude -p "fix a typo in README" --allowedTools gh-fix-ci,migrating-dbt-project-across-platforms --add-dir /Users/juanpablorivero
 ```
+
+Illustrative example where Jev also judges the task needs a different
+model/effort than the target's configured default:
+
+```
+$ usher-point route "refactor generics across five files" --engine jev
+task:   "refactor generics across five files"
+via:    jev-model (typesafe/jev-1.13)
+target: codex-cli
+skills: typescript-advanced-types (jev-model)
+model override: effort=high
+command: codex exec --skip-git-repo-check --sandbox read-only --config "model=\"gpt-6-astra\"" --config "model_reasoning_effort=\"high\"" -C /Users/juanpablorivero refactor generics across five files
+```
+
+This module's prompt-building and response-parsing logic (including the
+fail-closed-to-`null` path on a malformed reply, and dropping any
+Jev-returned skill name/path that doesn't match a shown candidate) was unit
+verified with a mocked OpenRouter response — see `src/routing/jev-model.ts`;
+no test framework was added for this (none exists yet in this repo, see
+`CONTRIBUTING.md`), so it was a throwaway standalone script, not committed.
 
 What *was* verified for real on this machine, with `--engine jev` forced and
 no API key present, is the fail-closed error path (not a silent fallback):
