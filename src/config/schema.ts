@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 /**
- * Zod schema for jev.config.json. This is the single source of truth for the
- * shape of jev's ruleset — everything downstream (routing, adapters) trusts
+ * Zod schema for usher-point.config.json. This is the single source of truth
+ * for the shape of usher-point's ruleset — everything downstream (routing, adapters) trusts
  * data that already passed this validation.
  */
 

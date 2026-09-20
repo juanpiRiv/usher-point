@@ -4,7 +4,7 @@ import { scanFallbackSkills } from "./fallback-scan";
 /**
  * Combines the registry (preferred) and the fallback scan (used only when no
  * registry exists in cwd) into a single ranked list. Output is always just
- * paths to SKILL.md — jev never injects skill content into a prompt itself,
+ * paths to SKILL.md — usher-point never injects skill content into a prompt itself,
  * matching the convention already used by skill-registry.
  */
 

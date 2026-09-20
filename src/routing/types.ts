@@ -10,7 +10,7 @@ export interface TaskShape {
   repoName?: string;
 }
 
-/** What decide.ts produces after walking jev.config.json.rules. */
+/** What decide.ts produces after walking usher-point.config.json.rules. */
 export interface Decision {
   target: RouteTarget;
   ruleId: string;

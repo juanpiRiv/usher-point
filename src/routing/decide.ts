@@ -2,7 +2,7 @@ import type { JevConfig, Rule } from "../config/schema";
 import type { Decision, RouteTarget, TaskShape } from "./types";
 
 /**
- * Decision engine: walks jev.config.json.rules in order, first match wins.
+ * Decision engine: walks usher-point.config.json.rules in order, first match wins.
  * An explicit --target flag always wins outright, before any rule is even
  * consulted. If nothing matches, fall back to the safest/cheapest target
  * (claude-inline) rather than guessing.

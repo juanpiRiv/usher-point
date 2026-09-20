@@ -12,9 +12,9 @@ import type { CommandSpec } from "../exec/run-command";
  * between Orca releases (see the `orca-cli` skill). Instead:
  *   1. Liveness is checked generically via `orca status --json`.
  *   2. The actual worktree-spawn subcommand is treated as data, cached by
- *      `jev doctor` (which runs `orca skills get orca-cli`) into
+ *      `usher-point doctor` (which runs `orca skills get orca-cli`) into
  *      orca-cli-reference.json (gitignored, refreshed on demand).
- *   3. If that cache is missing, jev fails with a clear "run `jev doctor`"
+ *   3. If that cache is missing, usher-point fails with a clear "run `usher-point doctor`"
  *      message instead of guessing at syntax.
  */
 
@@ -63,16 +63,16 @@ export function checkOrcaLiveness(binary: string = resolveOrcaBinary()): OrcaLiv
   }
 }
 
-/** Runs `orca skills get orca-cli` and refreshes the local reference cache. Used only by `jev doctor`. */
+/** Runs `orca skills get orca-cli` and refreshes the local reference cache. Used only by `usher-point doctor`. */
 export function refreshOrcaReference(binary: string = resolveOrcaBinary()): OrcaReference {
   const result = spawnSync(binary, ["skills", "get", "orca-cli"], { encoding: "utf-8" });
 
   if (result.error) {
-    throw new Error(`jev: could not run "${binary} skills get orca-cli": ${result.error.message}`);
+    throw new Error(`usher-point: could not run "${binary} skills get orca-cli": ${result.error.message}`);
   }
   if (result.status !== 0) {
     throw new Error(
-      `jev: "${binary} skills get orca-cli" exited with ${result.status}\n${result.stderr}`
+      `usher-point: "${binary} skills get orca-cli" exited with ${result.status}\n${result.stderr}`
     );
   }
 
@@ -92,7 +92,7 @@ export function refreshOrcaReference(binary: string = resolveOrcaBinary()): Orca
  * Best-effort, non-authoritative heuristic: look for a fenced code line that
  * looks like an `orca <subcommand> ...` worktree-spawn invocation. This is
  * intentionally conservative — if it can't find a confident match, it
- * returns undefined and callers must fail closed with a "run jev doctor"
+ * returns undefined and callers must fail closed with a "run usher-point doctor"
  * style error rather than hardcode a guess.
  */
 function extractSpawnCommandTemplate(raw: string): string[] | undefined {
@@ -113,7 +113,7 @@ export function loadOrcaReference(): OrcaReference {
     raw = fs.readFileSync(cachePath, "utf-8");
   } catch {
     throw new Error(
-      `jev: no Orca CLI reference cache found at ${cachePath}. Run \`jev doctor\` first.`
+      `usher-point: no Orca CLI reference cache found at ${cachePath}. Run \`usher-point doctor\` first.`
     );
   }
 
@@ -121,7 +121,7 @@ export function loadOrcaReference(): OrcaReference {
     return JSON.parse(raw) as OrcaReference;
   } catch (err) {
     throw new Error(
-      `jev: Orca CLI reference cache at ${cachePath} is corrupt (${(err as Error).message}). Run \`jev doctor\` to refresh it.`
+      `usher-point: Orca CLI reference cache at ${cachePath} is corrupt (${(err as Error).message}). Run \`usher-point doctor\` to refresh it.`
     );
   }
 }
@@ -143,8 +143,8 @@ export function resolveOrcaTarget(config: JevConfig, decision: Decision, cwd: st
 
 /**
  * Builds the real dispatch command from the cached reference. Throws (with a
- * "run `jev doctor`" message) if the cache is missing or has no recognized
- * spawn subcommand — jev never falls back to hardcoded Orca syntax.
+ * "run `usher-point doctor`" message) if the cache is missing or has no recognized
+ * spawn subcommand — usher-point never falls back to hardcoded Orca syntax.
  */
 export function buildOrcaCommand(
   _target: TargetConfig,
@@ -155,7 +155,7 @@ export function buildOrcaCommand(
   const reference = loadOrcaReference();
   if (!reference.spawnCommandTemplate) {
     throw new Error(
-      `jev: Orca CLI reference cache at ${referenceCachePath()} has no recognized worktree-spawn subcommand. Run \`jev doctor\` to refresh it, or inspect the cache file manually.`
+      `usher-point: Orca CLI reference cache at ${referenceCachePath()} has no recognized worktree-spawn subcommand. Run \`usher-point doctor\` to refresh it, or inspect the cache file manually.`
     );
   }
 

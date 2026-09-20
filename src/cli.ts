@@ -98,12 +98,12 @@ function printPlan(
 
 function main(): void {
   const program = new Command();
-  program.name("jev").description("Decide and dispatch a task to claude / codex / orca.");
+  program.name("usher-point").description("Decide and dispatch a task to claude / codex / orca.");
 
   const addSharedOptions = (cmd: Command): Command =>
     cmd
       .argument("<task>", "description of the task to route")
-      .option("--repo <name>", "known repo name (see jev.config.json knownRepos)")
+      .option("--repo <name>", "known repo name (see usher-point.config.json knownRepos)")
       .option("--target <target>", "force claude-inline | codex-cli | orca-worktree")
       .option("--worktree", "force isolation in a worktree")
       .option("--verbose", "print full task-shape classification");

@@ -1,15 +1,15 @@
 {
-  "name": "jev",
+  "name": "usher-point",
   "version": "0.1.0",
   "description": "Local CLI that decides where a task should run (Claude Code inline, Codex CLI, or an isolated Orca worktree) and dispatches it.",
   "private": true,
   "type": "commonjs",
   "bin": {
-    "jev": "./dist/cli.js"
+    "usher-point": "./dist/cli.js"
   },
   "files": [
     "dist",
-    "jev.config.json"
+    "usher-point.config.json"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/add-shebang.js",

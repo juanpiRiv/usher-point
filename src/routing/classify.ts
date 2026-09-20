@@ -3,7 +3,7 @@ import type { RouteTarget, TaskShape } from "./types";
 
 /**
  * Rule-based (no ML) task classification. Every signal here is an explicit,
- * inspectable keyword/flag check — `jev route --verbose` can print exactly
+ * inspectable keyword/flag check — `usher-point route --verbose` can print exactly
  * why a TaskShape came out the way it did.
  */
 
@@ -47,7 +47,7 @@ function resolveExplicitTarget(target: string | undefined): RouteTarget | undefi
   const match = VALID_TARGETS.find((candidate) => candidate === target);
   if (!match) {
     throw new Error(
-      `jev: invalid --target "${target}". Expected one of: ${VALID_TARGETS.join(", ")}.`
+      `usher-point: invalid --target "${target}". Expected one of: ${VALID_TARGETS.join(", ")}.`
     );
   }
   return match;
