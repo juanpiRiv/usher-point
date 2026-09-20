@@ -58,6 +58,13 @@ This installs directly from the public GitHub repo — no npm registry
 publish is involved. TypeScript is built automatically on install via the
 package's `prepare` script; there is nothing else to run.
 
+**Requires npm ≥ 12.** Older npm (confirmed broken on 11.19.0) doesn't
+install `devDependencies` before running `prepare` for a global git
+install, so the build silently never runs and no `usher`/`usher-point`
+binary gets created — with no error shown. Check with `npm -v`; if you're
+below 12, run `npm install -g npm@latest` first, or use
+`npx -y npm@latest install -g github:juanpiRiv/usher-point` instead.
+
 `usher-point` only *orchestrates* other CLIs — it doesn't install them. For
 it to be useful, also make sure these are on your `PATH`:
 

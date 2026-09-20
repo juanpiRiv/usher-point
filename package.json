@@ -4,6 +4,9 @@
   "description": "Local CLI that decides where a task should run (Claude Code inline, Codex CLI, or an isolated Orca worktree) and dispatches it.",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "npm": ">=12.0.0"
+  },
   "bin": {
     "usher-point": "./dist/cli.js",
     "usher": "./dist/cli.js"
