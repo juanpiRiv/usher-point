@@ -1,5 +1,9 @@
 # Contributing
 
+This covers the development workflow only. If you just want to use
+`usher-point` as a CLI without cloning the source, see the "Install as a CLI
+(no cloning)" section in `README.md` instead.
+
 ## Local setup
 
 ```sh

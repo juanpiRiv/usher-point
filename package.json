@@ -14,7 +14,8 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/add-shebang.js",
-    "dev": "tsc -p tsconfig.json --watch"
+    "dev": "tsc -p tsconfig.json --watch",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "commander": "^12.1.0",

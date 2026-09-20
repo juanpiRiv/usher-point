@@ -23,6 +23,51 @@ subcommand (`route`/`run`/`doctor`) for one-shot/scripted use.
 > real, third-party AI model this CLI can *optionally* call — the old
 > scaffolding name and the third-party model name are just a coincidence.
 
+## Installation
+
+There are two supported ways to get `usher-point`, depending on what you're
+doing.
+
+### Development
+
+Working *on* `usher-point` itself:
+
+```sh
+git clone https://github.com/juanpiRiv/usher-point.git
+cd usher-point
+npm install
+npm run build
+npm link
+```
+
+`npm link` makes `usher`/`usher-point` resolve globally to this checkout's
+`dist/cli.js`. While editing, run `npm run dev` (a `tsc --watch`) in a spare
+terminal to rebuild on save — no need to re-link. See `CONTRIBUTING.md` for
+the full dev workflow, engineering conventions, and how to add rules/adapters.
+
+### Install as a CLI (no cloning)
+
+Using `usher-point` on a machine without cloning or building it yourself:
+
+```sh
+npm install -g github:juanpiRiv/usher-point
+usher
+```
+
+This installs directly from the public GitHub repo — no npm registry
+publish is involved. TypeScript is built automatically on install via the
+package's `prepare` script; there is nothing else to run.
+
+`usher-point` only *orchestrates* other CLIs — it doesn't install them. For
+it to be useful, also make sure these are on your `PATH`:
+
+- `claude` (Claude Code) and `codex` (Codex CLI) — required, since every
+  routing target ultimately shells out to one of these.
+- `orca` — optional, only needed if you use the `orca-worktree` target.
+
+`OPENROUTER_API_KEY` is optional and only needed if you enable the Jev
+routing engine (see below).
+
 ## Interactive mode (primary way to use it)
 
 Run `usher` (or `usher-point` — both resolve to the same binary) with no
